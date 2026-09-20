@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kelly — Asistente Local</title>
+    <link rel="manifest" href="/manifest.json">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100dvh;
+            padding: 1.5rem 1rem;
+            gap: 1.25rem;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #94a3b8;
+            letter-spacing: 0.05em;
+            margin-top: 0.5rem;
+        }
+
+        /* Botón push-to-talk */
+        #recordBtn {
+            width: 8.5rem;
+            height: 8.5rem;
+            border-radius: 50%;
+            border: 3px solid #3b82f6;
+            background: #1e3a5f;
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            flex-shrink: 0;
+        }
+
+        #recordBtn:active,
+        #recordBtn.recording {
+            background: #7f1d1d;
+            border-color: #ef4444;
+            transform: scale(0.96);
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+        }
+
+        #recordBtn.playing {
+            border-color: #22c55e;
+            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.3);
+        }
+
+        .mic-icon { font-size: 2rem; line-height: 1; }
+
+        /* Status */
+        #status {
+            font-size: 0.9rem;
+            color: #64748b;
+            min-height: 1.4em;
+            transition: color 0.2s;
+            text-align: center;
+        }
+        #status.active { color: #94a3b8; }
+        #status.error  { color: #f87171; }
+
+        #conn-dot {
+            width: 0.45rem;
+            height: 0.45rem;
+            border-radius: 50%;
+            background: #64748b;
+            display: inline-block;
+            margin-right: 0.35rem;
+            transition: background 0.3s;
+        }
+        #conn-dot.connected    { background: #22c55e; }
+        #conn-dot.disconnected { background: #ef4444; }
+
+        /* ── Panel de historial ─────────────────────────────────────────── */
+        #history-panel {
+            width: min(95vw, 32rem);
+            background: #1e293b;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            max-height: 55vh;
+            border: 1px solid #334155;
+        }
+
+        .history-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.6rem 0.9rem;
+            background: #0f172a;
+            border-bottom: 1px solid #334155;
+            flex-shrink: 0;
+        }
+
+        .history-header span {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        #clearBtn {
+            background: none;
+            border: 1px solid #334155;
+            color: #64748b;
+            font-size: 0.7rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 0.35rem;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+        }
+        #clearBtn:hover { color: #f87171; border-color: #f87171; }
+
+        #history-messages {
+            overflow-y: auto;
+            padding: 0.75rem 0.9rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            min-height: 3rem;
+        }
+
+        .msg {
+            font-size: 0.83rem;
+            line-height: 1.45;
+            max-width: 100%;
+            word-break: break-word;
+        }
+
+        .msg-user {
+            color: #60a5fa;
+        }
+        .msg-user::before { content: "Tú  "; font-weight: 700; }
+
+        .msg-assistant {
+            color: #86efac;
+        }
+        .msg-assistant::before { content: "Kelly  "; font-weight: 700; }
+
+        .msg-system {
+            color: #475569;
+            font-style: italic;
+            font-size: 0.75rem;
+        }
+
+        .empty-hint {
+            color: #334155;
+            font-size: 0.8rem;
+            font-style: italic;
+            text-align: center;
+            padding: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>✦ Kelly</h1>
+
+    <button id="recordBtn" aria-label="Mantén presionado para hablar">
+        <span class="mic-icon">🎙️</span>
+        <span id="btnLabel">Hablar</span>
+    </button>
+
+    <p id="status">
+        <span id="conn-dot"></span>
+        <span id="statusText">Conectando...</span>
+    </p>
+
+    <!-- Panel de historial (B4) -->
+    <div id="history-panel" role="log" aria-live="polite" aria-label="Historial de conversación">
+        <div class="history-header">
+            <span>Conversación</span>
+            <button id="clearBtn" title="Borrar historial">Borrar</button>
+        </div>
+        <div id="history-messages">
+            <p class="empty-hint">Mantén presionado el botón y habla con Kelly</p>
+        </div>
+    </div>
+
+<script>
+// ─── Referencias DOM ──────────────────────────────────────────────────────────
+const btn          = document.getElementById('recordBtn');
+const btnLabel     = document.getElementById('btnLabel');
+const statusText   = document.getElementById('statusText');
+const statusEl     = document.getElementById('status');
+const connDot      = document.getElementById('conn-dot');
+const historyMsgs  = document.getElementById('history-messages');
+const clearBtn     = document.getElementById('clearBtn');
+
+// ─── Estado ───────────────────────────────────────────────────────────────────
+let mediaRecorder  = null;
+let audioChunks    = [];
+let audioQueue     = [];      // URLs de ObjectURL pendientes
+let isPlaying      = false;
+let currentAudio   = null;    // Audio en reproducción actual
+let ws             = null;
+
+// ─── B3: Historial de conversación (solo en memoria, se reinicia con la pestaña)
+let conversationHistory = [];  // [{role: "user"|"assistant", content: "..."}]
+const MAX_TURNS = 6;           // Máximo de turnos a mantener (= 12 mensajes)
+let pendingUserText = null;    // Texto transcrito, esperando respuesta del LLM
+
+// ─── Helpers de estado ────────────────────────────────────────────────────────
+function setStatus(text, cls = 'active') {
+    statusText.textContent = text;
+    statusEl.className = cls;
+}
+
+// ─── B4: Historial UI ─────────────────────────────────────────────────────────
+function addHistoryEntry(text, role = 'system') {
+    // Eliminar hint vacío si existe
+    const hint = historyMsgs.querySelector('.empty-hint');
+    if (hint) hint.remove();
+
+    const div = document.createElement('div');
+    div.className = `msg msg-${role}`;
+    div.textContent = text;
+    historyMsgs.appendChild(div);
+    historyMsgs.scrollTop = historyMsgs.scrollHeight;
+}
+
+function clearHistory() {
+    conversationHistory = [];
+    pendingUserText = null;
+    historyMsgs.innerHTML = '<p class="empty-hint">Historial borrado. Habla con Kelly para comenzar.</p>';
+    console.log('[history] Historial borrado');
+}
+
+clearBtn.addEventListener('click', clearHistory);
+
+function trimHistory() {
+    // Mantener máximo MAX_TURNS turnos (2 mensajes por turno)
+    const maxMsgs = MAX_TURNS * 2;
+    if (conversationHistory.length > maxMsgs) {
+        conversationHistory.splice(0, conversationHistory.length - maxMsgs);
+    }
+}
+
+// ─── Cola de reproducción FIFO ───────────────────────────────────────────────
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        isPlaying = false;
+        currentAudio = null;
+        btn.classList.remove('playing');
+        setStatus('Listo para escuchar');
+        return;
+    }
+    if (isPlaying) return;
+
+    isPlaying = true;
+    btn.classList.add('playing');
+    setStatus('Reproduciendo...');
+
+    const audioUrl = audioQueue.shift();
+    currentAudio = new Audio(audioUrl);
+
+    currentAudio.play().catch(e => {
+        console.error('Error de reproducción:', e);
+        URL.revokeObjectURL(audioUrl);
+        isPlaying = false;
+        currentAudio = null;
+        playNextAudio();
+    });
+
+    currentAudio.onended = () => {
+        URL.revokeObjectURL(audioUrl);  // evita memory leak
+        isPlaying = false;
+        currentAudio = null;
+        playNextAudio();
+    };
+}
+
+// ─── Barge-in: detener audio y notificar backend ──────────────────────────────
+function cancelPlayback() {
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+    }
+    audioQueue.forEach(url => URL.revokeObjectURL(url));
+    audioQueue = [];
+    isPlaying = false;
+    btn.classList.remove('playing');
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'cancel' }));
+    }
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+let reconnectDelay = 1000;
+const MAX_RECONNECT_DELAY = 16000;
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${window.location.host}/ws/audio`);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+        connDot.className = 'connected';
+        setStatus('Listo para escuchar');
+        reconnectDelay = 1000;
+        console.log('[ws] Conectado');
+    };
+
+    ws.onclose = () => {
+        connDot.className = 'disconnected';
+        setStatus('Desconectado — reconectando...', 'error');
+        console.warn(`[ws] Desconectado. Reintentando en ${reconnectDelay}ms`);
+        setTimeout(connectWebSocket, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    };
+
+    ws.onerror = (e) => {
+        console.error('[ws] Error:', e);
+    };
+
+    ws.onmessage = (event) => {
+        // Binario = chunk de audio WAV
+        if (event.data instanceof ArrayBuffer) {
+            const blob = new Blob([event.data], { type: 'audio/wav' });
+            const audioUrl = URL.createObjectURL(blob);
+            audioQueue.push(audioUrl);
+            playNextAudio();
+            return;
+        }
+
+        // Texto = mensaje de control JSON
+        try {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'transcript') {
+                // STT completado: el servidor nos dice qué reconoció
+                pendingUserText = msg.text;
+                addHistoryEntry(msg.text, 'user');
+                // Añadir al historial de conversación
+                conversationHistory.push({ role: 'user', content: msg.text });
+                trimHistory();
+                console.log('[history] Usuario:', msg.text);
+
+            } else if (msg.type === 'assistant_text') {
+                // Respuesta completa del LLM
+                if (msg.text) {
+                    conversationHistory.push({ role: 'assistant', content: msg.text });
+                    trimHistory();
+                    addHistoryEntry(msg.text, 'assistant');
+                    console.log('[history] Kelly:', msg.text);
+                }
+
+            } else if (msg.type === 'no_speech') {
+                setStatus('No se detectó habla. Inténtalo de nuevo.');
+                addHistoryEntry('(sin voz detectada)', 'system');
+
+            } else if (msg.type === 'error') {
+                setStatus(`Error: ${msg.message}`, 'error');
+                addHistoryEntry(`Error: ${msg.message}`, 'system');
+            }
+        } catch {
+            // No es JSON, ignorar
+        }
+    };
+}
+
+// ─── Grabación (MediaRecorder) ────────────────────────────────────────────────
+navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(stream => {
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+                ? 'audio/ogg;codecs=opus'
+                : '';
+
+        mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                setStatus('Sin conexión al servidor', 'error');
+                return;
+            }
+            const mtype = mediaRecorder.mimeType || 'audio/webm';
+            const blob = new Blob(audioChunks, { type: mtype });
+            audioChunks = [];
+            setStatus('Procesando...');
+
+            // B3: Enviar historial ANTES del audio binario
+            // Solo enviar si hay historial (no el primer turno)
+            const historyToSend = conversationHistory.slice(); // copia
+            if (historyToSend.length > 0) {
+                ws.send(JSON.stringify({
+                    type: 'audio_with_history',
+                    history: historyToSend,
+                }));
+            }
+
+            // Enviar el audio binario
+            blob.arrayBuffer().then(buf => ws.send(buf));
+        };
+
+        // ── Push-to-Talk handlers ──────────────────────────────────────────
+        const startRecording = (e) => {
+            e.preventDefault();
+            cancelPlayback();   // barge-in
+
+            audioChunks = [];
+            if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+            mediaRecorder.start();
+
+            btn.classList.add('recording');
+            btnLabel.textContent = 'Escuchando';
+            setStatus('Escuchando...');
+        };
+
+        const stopRecording = (e) => {
+            e.preventDefault();
+            if (mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                btn.classList.remove('recording');
+                btnLabel.textContent = 'Hablar';
+            }
+        };
+
+        btn.addEventListener('mousedown', startRecording);
+        btn.addEventListener('mouseup', stopRecording);
+        btn.addEventListener('touchstart', startRecording, { passive: false });
+        btn.addEventListener('touchend', stopRecording, { passive: false });
+        btn.addEventListener('mouseleave', stopRecording);
+    })
+    .catch(err => {
+        setStatus('Permiso de micrófono denegado', 'error');
+        btn.disabled = true;
+        console.error('[mic] Error:', err);
+    });
+
+// ─── Iniciar WebSocket ────────────────────────────────────────────────────────
+connectWebSocket();
+</script>
+</body>
+</html>

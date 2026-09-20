@@ -1,0 +1,31 @@
+{
+  "label": "threads5_ngl8",
+  "runs": 3,
+  "avg_ttft_ms": 259.5,
+  "avg_total_ms": 14586.6,
+  "avg_tokens": 150.0,
+  "avg_toks_per_sec": 10.42,
+  "runs_detail": [
+    {
+      "label": "threads5_ngl8",
+      "ttft_ms": 573.0,
+      "total_ms": 14561.6,
+      "tokens": 150,
+      "toks_per_sec": 10.65
+    },
+    {
+      "label": "threads5_ngl8",
+      "ttft_ms": 102.0,
+      "total_ms": 13891.7,
+      "tokens": 150,
+      "toks_per_sec": 10.81
+    },
+    {
+      "label": "threads5_ngl8",
+      "ttft_ms": 103.6,
+      "total_ms": 15306.5,
+      "tokens": 150,
+      "toks_per_sec": 9.8
+    }
+  ]
+}

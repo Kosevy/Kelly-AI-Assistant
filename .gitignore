@@ -1,0 +1,74 @@
+# ─── Environment Variables & Secrets ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Audio Recordings & Biometric Voice Samples (Private/Sensitive) ─────────
+voice_sample.wav
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.raw
+*.pcm
+temp_out.wav
+output*.wav
+*.tmp.wav
+debug/
+
+# ─── Runtime Logs & Diagnostic Traces ───────────────────────────────────────
+logs/
+*.log
+
+# ─── Virtual Environments ──────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ─── Python Caches & Build Artifacts ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+.Python
+
+# ─── Model Weights & Heavy Binaries ─────────────────────────────────────────
+models/
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+
+# ─── External Clones & Third-Party Builds ──────────────────────────────────
+llama.cpp/
+
+# ─── Code Quality & Test Caches ────────────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ─── IDE & Editor Configurations ───────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ─── OS-Generated Metadata ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
