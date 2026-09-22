@@ -23,6 +23,12 @@ WebSocket Protocol (Server -> Client):
   - JSON {"type": "assistant_text", "text": "..."}: Complete LLM response text.
   - JSON {"type": "no_speech"}: VAD filter dropped silent audio.
   - JSON {"type": "error", "message": "..."}: Pipeline error notification.
+
+TTS Architecture:
+  - LLM token streaming and TTS synthesis run concurrently.
+  - LLM enqueues sentences into an asyncio.Queue; a single _tts_worker() coroutine
+    drains it strictly in FIFO order, guaranteeing ordered audio output.
+  - Sentences > TTS_MAX_CHARS chars are split before synthesis to avoid XTTS truncation.
 """
 from __future__ import annotations
 
@@ -299,6 +305,111 @@ def _float32_to_pcm16(samples: np.ndarray) -> bytes:
     return (clipped * 32767).astype(np.int16).tobytes()
 
 
+# Maximum chars per sentence accepted by XTTS for language 'es' is 239.
+# We split at 200 to leave headroom for normalization expansion.
+_TTS_MAX_CHARS = 200
+_TTS_MIN_SPLIT_CHARS = 30  # sub-sentence must be at least this long
+
+
+def _split_long_sentence(text: str, max_chars: int = _TTS_MAX_CHARS) -> list[str]:
+    """
+    Split a sentence that exceeds max_chars into shorter sub-sentences.
+
+    Splitting priority:
+      1. Comma / semicolon / colon boundaries (keeping punctuation with left part).
+      2. Conjunctions: ' y ', ' pero ', ' o ', ' sin embargo ', ' aunque '.
+      3. Word-boundary split at midpoint (last resort).
+
+    Each part must be at least _TTS_MIN_SPLIT_CHARS chars. Parts shorter
+    than that are merged with the next one.
+
+    Returns a list of strings; always at least one element.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    import re
+    # Try splitting on punctuation (, ; :) — keep delimiter with left part
+    parts = re.split(r'(?<=[,;:])\s+', text)
+    if len(parts) > 1:
+        # Merge short leading fragments forward
+        merged: list[str] = []
+        acc = ""
+        for p in parts:
+            candidate = (acc + " " + p).strip() if acc else p
+            if len(candidate) <= max_chars or not acc:
+                acc = candidate
+            else:
+                if len(acc) >= _TTS_MIN_SPLIT_CHARS:
+                    merged.append(acc)
+                    acc = p
+                else:
+                    acc = candidate  # still too short, keep accumulating
+        if acc:
+            merged.append(acc)
+        if all(len(m) <= max_chars for m in merged) and len(merged) > 1:
+            logger.debug(
+                f"[tts] Splitting long sentence ({len(text)} chars) into "
+                f"{len(merged)} parts (punctuation split)"
+            )
+            return merged
+
+    # Try splitting on conjunctions
+    conjunction_pattern = r'(?i)\s+(y|pero|o|ni|sin embargo|aunque|porque|entonces)\s+'
+    conj_parts = re.split(conjunction_pattern, text)
+    # re.split with groups returns alternating content/delimiter
+    # Rebuild keeping conjunctions with the right part
+    if len(conj_parts) > 1:
+        rebuilt: list[str] = []
+        i = 0
+        while i < len(conj_parts):
+            piece = conj_parts[i]
+            if i + 1 < len(conj_parts):
+                # next element is the conjunction
+                conj = conj_parts[i + 1]
+                if i + 2 < len(conj_parts):
+                    next_piece = conj_parts[i + 2]
+                    rebuilt.append(piece.strip())
+                    rebuilt.append((conj + " " + next_piece).strip())
+                    i += 3
+                    continue
+            rebuilt.append(piece.strip())
+            i += 1
+
+        rebuilt = [r for r in rebuilt if r]
+        # Merge parts shorter than min
+        merged2: list[str] = []
+        acc2 = ""
+        for r in rebuilt:
+            candidate2 = (acc2 + " " + r).strip() if acc2 else r
+            if len(candidate2) <= max_chars:
+                acc2 = candidate2
+            else:
+                if acc2 and len(acc2) >= _TTS_MIN_SPLIT_CHARS:
+                    merged2.append(acc2)
+                    acc2 = r
+                else:
+                    acc2 = candidate2
+        if acc2:
+            merged2.append(acc2)
+        if all(len(m) <= max_chars for m in merged2) and len(merged2) > 1:
+            logger.debug(
+                f"[tts] Splitting long sentence ({len(text)} chars) into "
+                f"{len(merged2)} parts (conjunction split)"
+            )
+            return merged2
+
+    # Last resort: split at word boundary near midpoint
+    words = text.split()
+    mid = len(words) // 2
+    left = " ".join(words[:mid])
+    right = " ".join(words[mid:])
+    logger.debug(
+        f"[tts] Splitting long sentence ({len(text)} chars) into 2 parts (midpoint split)"
+    )
+    return [p for p in [left, right] if p]
+
+
 # ─── Pipeline context ─────────────────────────────────────────────────────────
 
 class _PipelineContext:
@@ -324,21 +435,17 @@ async def _stream_tts_sentence(
     websocket: WebSocket,
     sentence_id: int,
     text: str,
-    ctx: _PipelineContext,
+    cancel_event: asyncio.Event,
     tts_metrics: dict,
 ) -> None:
     """
     Stream a single sentence through XTTS inference_stream.
 
-    Protocol:
-      1. Send JSON {"type": "audio_chunk_start", "sentence_id": N}
-      2. For each PCM chunk: send raw int16 bytes
-      3. Send JSON {"type": "audio_chunk_end", "sentence_id": N, "chunk_count": M}
-
-    Degrades to synchronous inference() if inference_stream raises.
-    Updates tts_metrics dict in-place for caller to collect timing.
+    Sends audio_chunk_start, then raw PCM int16 chunks, then audio_chunk_end.
+    Degrades to synchronous inference() if inference_stream fails.
+    Checks cancel_event between each chunk for fast barge-in response.
     """
-    if ctx.cancel_event.is_set():
+    if cancel_event.is_set():
         return
 
     t_tts_start = time.perf_counter()
@@ -351,33 +458,42 @@ async def _stream_tts_sentence(
     stream_failed = False
 
     try:
-        # Run synchronous generator in a thread pool.
-        # We use a queue to bridge the thread-based generator and async WS sends.
         loop = asyncio.get_event_loop()
-        chunk_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
+        # maxsize=4: back-pressures the producer if consumer (WS) is slow
+        chunk_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
 
-        def _producer():
-            """Runs in thread: pushes numpy chunks into the asyncio queue."""
+        def _producer() -> None:
+            """Thread: push numpy arrays (or Exception sentinel) into async queue."""
             try:
                 for chunk in _iter_inference_stream(text):
-                    # put_nowait would block if queue is full, use put via run_coroutine
-                    asyncio.run_coroutine_threadsafe(
+                    if cancel_event.is_set():
+                        break
+                    fut = asyncio.run_coroutine_threadsafe(
                         chunk_queue.put(chunk), loop
-                    ).result(timeout=settings.tts_stream_timeout_s)
+                    )
+                    try:
+                        fut.result(timeout=settings.tts_stream_timeout_s)
+                    except Exception:
+                        break  # queue.put timed out or cancelled — stop producing
             except Exception as exc:
+                # Send exception as item so consumer can detect failure
                 asyncio.run_coroutine_threadsafe(
-                    chunk_queue.put(exc), loop  # type: ignore[arg-type]
+                    chunk_queue.put(exc), loop
                 ).result(timeout=5.0)
             finally:
-                asyncio.run_coroutine_threadsafe(
-                    chunk_queue.put(None), loop  # sentinel
-                ).result(timeout=5.0)
+                # Always send sentinel; ignore any error putting it
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        chunk_queue.put(None), loop
+                    ).result(timeout=5.0)
+                except Exception:
+                    pass
 
-        producer_future = asyncio.get_event_loop().run_in_executor(None, _producer)
+        producer_future = loop.run_in_executor(None, _producer)
 
         while True:
-            if ctx.cancel_event.is_set():
-                logger.info(f"[tts] Sentence #{sentence_id} cancelled mid-stream")
+            if cancel_event.is_set():
+                logger.info(f"[tts] #{sentence_id} cancelled mid-stream")
                 break
 
             try:
@@ -386,62 +502,53 @@ async def _stream_tts_sentence(
                     timeout=settings.tts_stream_timeout_s,
                 )
             except asyncio.TimeoutError:
-                logger.error(f"[tts] Sentence #{sentence_id} timed out waiting for chunk")
+                logger.error(f"[tts] #{sentence_id} timed out waiting for chunk")
                 stream_failed = True
                 break
 
-            # Sentinel: generator exhausted
-            if item is None:
+            if item is None:          # sentinel — generator done
                 break
-
-            # Exception from producer
             if isinstance(item, Exception):
                 logger.error(f"[tts] inference_stream error on #{sentence_id}: {item}")
                 stream_failed = True
                 break
 
-            # Happy path: numpy chunk
+            # Happy path: numpy float32 chunk
             if t_first_chunk is None:
                 t_first_chunk = time.perf_counter()
-                first_chunk_ms = (t_first_chunk - t_tts_start) * 1000
-                logger.debug(
-                    f"[tts] #{sentence_id} first chunk: {first_chunk_ms:.0f}ms "
-                    f"| {len(item)} samples"
-                )
-                # Update global first-chunk metric (only for first sentence)
+                first_ms = (t_first_chunk - t_tts_start) * 1000
+                logger.debug(f"[tts] #{sentence_id} first chunk: {first_ms:.0f}ms")
                 if tts_metrics.get("tts_first_chunk_ms") is None:
-                    tts_metrics["tts_first_chunk_ms"] = round(first_chunk_ms, 1)
+                    tts_metrics["tts_first_chunk_ms"] = round(first_ms, 1)
 
-            pcm_bytes = _float32_to_pcm16(item)
-            if not ctx.cancel_event.is_set():
-                await websocket.send_bytes(pcm_bytes)
+            if not cancel_event.is_set():
+                await websocket.send_bytes(_float32_to_pcm16(item))
             chunk_count += 1
-            logger.debug(
-                f"[tts] #{sentence_id} chunk {chunk_count} | "
-                f"{len(item)} samples | {len(pcm_bytes)} bytes"
-            )
 
-        # Ensure producer thread is done
+        # Wait for the producer thread to finish cleanly
         try:
-            await asyncio.wait_for(producer_future, timeout=5.0)
-        except (asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(asyncio.shield(producer_future), timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             pass
 
     except asyncio.CancelledError:
-        logger.info(f"[tts] Sentence #{sentence_id} task cancelled")
+        logger.info(f"[tts] #{sentence_id} CancelledError — cleaning up")
+        # Give producer thread a moment to notice cancel_event and exit
+        try:
+            await asyncio.wait_for(asyncio.shield(producer_future), timeout=2.0)
+        except Exception:
+            pass
         raise
     except Exception as exc:
         logger.error(f"[tts] Unexpected error on #{sentence_id}: {exc}", exc_info=True)
         stream_failed = True
 
-    # Graceful degradation: fall back to synchronous inference()
-    if stream_failed and not ctx.cancel_event.is_set():
-        logger.warning(
-            f"[tts] #{sentence_id} — falling back to synchronous inference()"
-        )
+    # Graceful degradation: synchronous fallback
+    if stream_failed and not cancel_event.is_set():
+        logger.warning(f"[tts] #{sentence_id} — falling back to synchronous inference()")
         try:
             wav_bytes = await asyncio.to_thread(_synthesize_sentence_sync, text)
-            if wav_bytes and not ctx.cancel_event.is_set():
+            if wav_bytes and not cancel_event.is_set():
                 await websocket.send_bytes(wav_bytes)
                 chunk_count = 1
         except Exception as exc2:
@@ -449,24 +556,84 @@ async def _stream_tts_sentence(
 
     t_tts_end = time.perf_counter()
     tts_total_ms = (t_tts_end - t_tts_start) * 1000
-
-    logger.info(
-        f"[tts] #{sentence_id} done | {chunk_count} chunks | "
-        f"total={tts_total_ms:.0f}ms | "
-        f"first_chunk={round((t_first_chunk - t_tts_start)*1000, 0) if t_first_chunk else 'N/A'}ms"
-    )
-
-    # Accumulate total streaming time
     tts_metrics["tts_total_streaming_ms"] = (
         tts_metrics.get("tts_total_streaming_ms", 0.0) + tts_total_ms
     )
 
-    if not ctx.cancel_event.is_set():
+    logger.info(
+        f"[tts] #{sentence_id} done | {chunk_count} chunks | "
+        f"total={tts_total_ms:.0f}ms | "
+        f"first_chunk={round((t_first_chunk - t_tts_start)*1000):.0f}ms"
+        if t_first_chunk else
+        f"[tts] #{sentence_id} done | {chunk_count} chunks | total={tts_total_ms:.0f}ms"
+    )
+
+    if not cancel_event.is_set():
         await websocket.send_json({
             "type": "audio_chunk_end",
             "sentence_id": sentence_id,
             "chunk_count": chunk_count,
         })
+
+
+# ─── TTS worker: serial queue consumer ───────────────────────────────────────
+
+async def _tts_worker(
+    websocket: WebSocket,
+    tts_queue: asyncio.Queue,
+    cancel_event: asyncio.Event,
+    tts_metrics: dict,
+) -> None:
+    """
+    Single coroutine that drains tts_queue in FIFO order.
+
+    The LLM streaming loop enqueues (sentence_id, text) tuples.
+    A sentinel value of None signals the worker to stop.
+    This guarantees audio is sent in strict sentence order regardless
+    of how long each inference_stream call takes.
+    """
+    while True:
+        try:
+            item = await asyncio.wait_for(
+                tts_queue.get(),
+                timeout=settings.tts_stream_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[tts_worker] Timed out waiting for next sentence — exiting")
+            break
+        except asyncio.CancelledError:
+            logger.info("[tts_worker] CancelledError — exiting cleanly")
+            return
+
+        if item is None:  # Sentinel: LLM is done, no more sentences
+            tts_queue.task_done()
+            break
+
+        sentence_id, text = item
+
+        if cancel_event.is_set():
+            tts_queue.task_done()
+            continue  # drain remaining items without processing
+
+        try:
+            await _stream_tts_sentence(
+                websocket, sentence_id, text, cancel_event, tts_metrics
+            )
+        except asyncio.CancelledError:
+            tts_queue.task_done()
+            raise
+        except Exception as exc:
+            logger.error(f"[tts_worker] Unhandled error on #{sentence_id}: {exc}")
+        finally:
+            tts_queue.task_done()
+
+    # Drain any remaining items (in case worker exits early due to timeout/cancel)
+    while not tts_queue.empty():
+        try:
+            tts_queue.get_nowait()
+            tts_queue.task_done()
+        except asyncio.QueueEmpty:
+            break
 
 
 # ─── Main pipeline ────────────────────────────────────────────────────────────
@@ -478,8 +645,12 @@ async def _run_pipeline(
     ctx: _PipelineContext,
 ) -> None:
     """
-    Full pipeline: STT -> LLM streaming -> TTS per sentence -> WebSocket.
-    TTS runs concurrently with LLM generation using asyncio.create_task().
+    Full pipeline: STT -> LLM streaming -> TTS (serial worker) -> WebSocket.
+
+    LLM token streaming and TTS synthesis run concurrently:
+    - LLM enqueues sentences; _tts_worker processes them in strict FIFO order.
+    - Sentences > _TTS_MAX_CHARS are pre-split to avoid XTTS truncation.
+    - Barge-in sets cancel_event, drains the queue, and cancels the worker task.
     """
     t_start = time.perf_counter()
 
@@ -521,29 +692,33 @@ async def _run_pipeline(
     t_first_token: float | None = None
     buffer = ""
     sentence_id = 0
-    t_first_audio: float | None = None
+    t_first_tts_enqueue: float | None = None
     full_response = ""
 
-    # Shared metrics dict updated by TTS tasks
     tts_metrics: dict[str, Any] = {
         "tts_first_chunk_ms": None,
         "tts_total_streaming_ms": 0.0,
     }
 
-    # Track concurrent TTS tasks
-    tts_tasks: list[asyncio.Task] = []
+    # Serial TTS queue: LLM enqueues sentences, worker processes in order
+    tts_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    worker_task = asyncio.create_task(
+        _tts_worker(websocket, tts_queue, ctx.cancel_event, tts_metrics),
+        name="tts_worker",
+    )
 
-    async def _launch_tts(sent: str) -> None:
-        """Launch TTS for a sentence as a concurrent task."""
-        nonlocal sentence_id, t_first_audio
-        sid = sentence_id
-        sentence_id += 1
-        task = asyncio.create_task(
-            _stream_tts_sentence(websocket, sid, sent, ctx, tts_metrics)
-        )
-        tts_tasks.append(task)
-        if t_first_audio is None:
-            t_first_audio = time.perf_counter()
+    def _enqueue_sentence(text: str) -> None:
+        """Enqueue a sentence (or its split parts) for ordered TTS synthesis."""
+        nonlocal sentence_id, t_first_tts_enqueue
+        parts = _split_long_sentence(text, max_chars=_TTS_MAX_CHARS)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            tts_queue.put_nowait((sentence_id, part))
+            if t_first_tts_enqueue is None:
+                t_first_tts_enqueue = time.perf_counter()
+            sentence_id += 1
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -590,14 +765,14 @@ async def _run_pipeline(
                                 continue
                             if ctx.cancel_event.is_set():
                                 break
-                            await _launch_tts(sent)
+                            _enqueue_sentence(sent)
 
                         buffer = remainder
 
         # ── Final remainder ────────────────────────────────────────────────
         if buffer.strip() and len(buffer.strip()) >= settings.tts_min_final_chars:
             if not ctx.cancel_event.is_set():
-                await _launch_tts(buffer.strip())
+                _enqueue_sentence(buffer.strip())
         elif buffer.strip():
             logger.debug(
                 f"[pipeline] Remainder discarded ({len(buffer.strip())} chars): "
@@ -607,24 +782,46 @@ async def _run_pipeline(
     except httpx.RequestError as e:
         logger.error(f"[pipeline] LLM connection error: {e}")
         await websocket.send_json({"type": "error", "message": "LLM connection error."})
+        # Signal worker to stop, then fall through to cleanup
+        await tts_queue.put(None)
+        await asyncio.gather(worker_task, return_exceptions=True)
         return
     except asyncio.CancelledError:
-        logger.info("[pipeline] Task cancelled externally")
-        # Cancel all pending TTS tasks
-        for t in tts_tasks:
-            if not t.done():
-                t.cancel()
+        logger.info("[pipeline] Pipeline task CancelledError — cleaning up TTS worker")
+        # Drain queue and cancel worker
+        while not tts_queue.empty():
+            try:
+                tts_queue.get_nowait()
+                tts_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
         raise
 
-    # ── Wait for all TTS tasks to complete (or cancel them) ───────────────────
-    if tts_tasks:
-        if ctx.cancel_event.is_set():
-            for t in tts_tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*tts_tasks, return_exceptions=True)
-        else:
-            await asyncio.gather(*tts_tasks, return_exceptions=True)
+    # ── Signal worker there are no more sentences ──────────────────────────────
+    if ctx.cancel_event.is_set():
+        # Barge-in: drain queue and cancel worker immediately
+        while not tts_queue.empty():
+            try:
+                tts_queue.get_nowait()
+                tts_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
+    else:
+        # Normal completion: send sentinel and wait for worker to finish all sentences
+        await tts_queue.put(None)
+        try:
+            await asyncio.wait_for(worker_task, timeout=120.0)
+        except asyncio.TimeoutError:
+            logger.error("[pipeline] TTS worker timed out after 120s — cancelling")
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
 
     # ── Send full response to client for history ───────────────────────────────
     if full_response.strip() and not ctx.cancel_event.is_set():
@@ -636,30 +833,22 @@ async def _run_pipeline(
     # ── Final metrics ──────────────────────────────────────────────────────────
     t_end = time.perf_counter()
     t_first_token = t_first_token or t_llm_start
-    metrics = {
+    metrics: dict[str, Any] = {
         "stt_latency_ms": round(stt_latency_ms, 1),
         "llm_ttft_ms": round((t_first_token - t_llm_start) * 1000, 1),
         "llm_total_ms": round((t_end - t_llm_start) * 1000, 1),
-        # t_first_audio marks when the first TTS task was launched (not when audio arrived)
-        "tts_launch_ms": round((t_first_audio - t_start) * 1000, 1) if t_first_audio else None,
         "tts_first_chunk_ms": tts_metrics.get("tts_first_chunk_ms"),
         "tts_total_streaming_ms": round(tts_metrics.get("tts_total_streaming_ms", 0.0), 1),
-        "e2e_first_audio_ms": (
-            round(
-                (t_start + (tts_metrics["tts_first_chunk_ms"] / 1000.0 if tts_metrics.get("tts_first_chunk_ms") else 0))
-                - t_start, 1
-            ) if tts_metrics.get("tts_first_chunk_ms") else None
-        ),
         "sentence_count": sentence_id,
         "history_turns": len(history) // 2,
     }
-    # Compute true e2e: STT + LLM-TTFT + TTS-first-chunk
-    if tts_metrics.get("tts_first_chunk_ms") is not None:
+    if tts_metrics.get("tts_first_chunk_ms") is not None and t_first_tts_enqueue is not None:
         metrics["e2e_first_audio_ms"] = round(
-            stt_latency_ms + (t_first_audio - t_stt_done) * 1000 + tts_metrics["tts_first_chunk_ms"],
+            stt_latency_ms
+            + (t_first_tts_enqueue - t_stt_done) * 1000
+            + tts_metrics["tts_first_chunk_ms"],
             1,
-        ) if t_first_audio else None
-
+        )
     logger.info(f"pipeline_metrics {json.dumps(metrics)}")
 
 

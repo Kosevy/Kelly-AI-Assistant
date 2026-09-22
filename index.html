@@ -210,17 +210,17 @@ const clearBtn     = document.getElementById('clearBtn');
 // ─── Estado ───────────────────────────────────────────────────────────────────
 let mediaRecorder  = null;
 let audioChunks    = [];
-let audioQueue     = [];      // Queue of AudioBuffer objects for playback
 let isPlaying      = false;
 let ws             = null;
 
-// ─── PCM streaming state (T4) ─────────────────────────────────────────────
-// keyed by sentence_id; each entry is an array of ArrayBuffer chunks
-let audioChunkBuffers = {};
-let activeSentenceId  = null;
-let audioCtx          = null;    // AudioContext (lazy init to satisfy autoplay policy)
-let nextPlayTime      = 0;       // Scheduling clock for gapless playback
-let audioFormat       = { sampleRate: 24000, channels: 1, dtype: 'int16' };
+// ─── PCM streaming state ──────────────────────────────────────────────────────
+let audioCtx      = null;    // AudioContext (lazy init — satisfies autoplay policy)
+let nextPlayTime  = 0;       // Scheduling clock for gapless playback
+let audioFormat   = { sampleRate: 24000, channels: 1, dtype: 'int16' };
+
+// Ordered playback state
+let nextSentenceId   = 0;           // Next sentence_id we expect to play
+let pendingSentences = {};           // sentence_id -> { chunks: ArrayBuffer[], done: bool }
 
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
@@ -237,44 +237,78 @@ function getAudioContext() {
 
 /**
  * Called for every binary WebSocket message.
- * Routes to the currently-active sentence buffer.
- * Backward-compatible: if buffer starts with RIFF (WAV), falls back to old path.
+ * Routes the chunk to the currently-open sentence buffer.
+ * Backward-compatible: RIFF-header WAV is decoded and scheduled directly.
  */
 function handleBinaryChunk(arrayBuffer) {
-    // Backward-compat: WAV header starts with 0x52 0x49 0x46 0x46 ("RIFF")
+    // Backward-compat: WAV starts with 0x52494646 "RIFF"
     const view = new DataView(arrayBuffer);
     if (view.byteLength >= 4 && view.getUint32(0, false) === 0x52494646) {
-        // Legacy WAV fallback
-        const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
         getAudioContext().decodeAudioData(
-            arrayBuffer.slice(0),  // decodeAudioData detaches the buffer; use a copy
-            (decoded) => enqueueAudioBuffer(decoded),
+            arrayBuffer.slice(0),
+            (decoded) => scheduleAudioBuffer(decoded),
             (e) => console.error('[audio] WAV decode error:', e)
         );
         return;
     }
 
-    // PCM int16 streaming path
-    if (activeSentenceId !== null && audioChunkBuffers[activeSentenceId]) {
-        audioChunkBuffers[activeSentenceId].push(arrayBuffer);
+    // PCM int16 path — find the sentence buffer that is open (not yet done)
+    // The last opened (audio_chunk_start received, audio_chunk_end not yet) is the active one
+    const activeSid = findActiveSentenceId();
+    if (activeSid !== null) {
+        pendingSentences[activeSid].chunks.push(arrayBuffer);
     } else {
-        // No active sentence frame — ignore stale chunk
-        console.warn('[audio] Binary chunk received with no active sentence buffer');
+        console.warn('[audio] Binary chunk with no open sentence buffer — ignored');
     }
 }
 
+/** Returns the highest sentence_id that has been started but not yet ended, or null. */
+function findActiveSentenceId() {
+    let active = null;
+    for (const sid of Object.keys(pendingSentences)) {
+        const entry = pendingSentences[sid];
+        if (!entry.done) {
+            const n = Number(sid);
+            if (active === null || n > active) active = n;
+        }
+    }
+    return active;
+}
+
 /**
- * Called on audio_chunk_end: assemble all PCM chunks for a sentence,
- * decode int16 -> float32, and schedule for playback.
+ * Called on audio_chunk_end: mark sentence as complete and try playing.
  */
-function enqueueStreamedSentence(sid) {
-    const chunks = audioChunkBuffers[sid];
-    if (!chunks || chunks.length === 0) {
-        delete audioChunkBuffers[sid];
+function onSentenceEnd(sid) {
+    if (!pendingSentences[sid]) {
+        console.warn(`[audio] audio_chunk_end for unknown sentence #${sid}`);
+        return;
+    }
+    pendingSentences[sid].done = true;
+    tryPlayNextSentence();
+}
+
+/**
+ * Plays sentences in strict order: nextSentenceId, nextSentenceId+1, ...
+ * Only advances when the current sentence is both complete and played.
+ */
+function tryPlayNextSentence() {
+    const entry = pendingSentences[nextSentenceId];
+    if (!entry || !entry.done) {
+        // Not ready yet — will be called again when audio_chunk_end arrives
         return;
     }
 
-    // Concatenate all ArrayBuffers
+    const chunks = entry.chunks;
+    delete pendingSentences[nextSentenceId];
+    nextSentenceId++;
+
+    if (chunks.length === 0) {
+        // Empty sentence (cancelled before any chunks arrived) — skip
+        tryPlayNextSentence();
+        return;
+    }
+
+    // Concatenate all ArrayBuffers for this sentence
     const totalBytes = chunks.reduce((acc, b) => acc + b.byteLength, 0);
     const combined   = new Uint8Array(totalBytes);
     let offset = 0;
@@ -282,33 +316,31 @@ function enqueueStreamedSentence(sid) {
         combined.set(new Uint8Array(chunk), offset);
         offset += chunk.byteLength;
     }
-    delete audioChunkBuffers[sid];
 
-    // Int16 -> float32
+    // int16 -> float32
     const int16View   = new Int16Array(combined.buffer);
     const numSamples  = int16View.length;
     const ctx         = getAudioContext();
-    const audioBuffer = ctx.createBuffer(
-        audioFormat.channels,
-        numSamples,
-        audioFormat.sampleRate
-    );
-    const float32 = audioBuffer.getChannelData(0);
+    const audioBuffer = ctx.createBuffer(audioFormat.channels, numSamples, audioFormat.sampleRate);
+    const float32     = audioBuffer.getChannelData(0);
     for (let i = 0; i < numSamples; i++) {
         float32[i] = int16View[i] / 32767;
     }
 
-    enqueueAudioBuffer(audioBuffer);
+    // Schedule with onended callback to chain the next sentence
+    scheduleAudioBuffer(audioBuffer, () => {
+        tryPlayNextSentence();
+    });
 }
 
 /**
  * Schedule an AudioBuffer for gapless sequential playback.
+ * Optional onEnded callback fires when this buffer finishes playing.
  */
-function enqueueAudioBuffer(audioBuffer) {
-    const ctx  = getAudioContext();
-    const now  = ctx.currentTime;
+function scheduleAudioBuffer(audioBuffer, onEnded = null) {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
 
-    // If we're behind (first chunk, or after a gap), start immediately
     if (nextPlayTime < now + 0.05) {
         nextPlayTime = now + 0.05;
     }
@@ -317,8 +349,6 @@ function enqueueAudioBuffer(audioBuffer) {
     source.buffer = audioBuffer;
     source.connect(ctx.destination);
     source.start(nextPlayTime);
-
-    // Advance clock
     nextPlayTime += audioBuffer.duration;
 
     btn.classList.add('playing');
@@ -326,9 +356,10 @@ function enqueueAudioBuffer(audioBuffer) {
     isPlaying = true;
 
     source.onended = () => {
+        if (onEnded) onEnded();
+        // If nothing more is scheduled, mark idle
         const currentNow = ctx.currentTime;
-        // Only set idle when nothing is scheduled ahead
-        if (nextPlayTime <= currentNow + 0.1) {
+        if (nextPlayTime <= currentNow + 0.15) {
             isPlaying = false;
             btn.classList.remove('playing');
             setStatus('Listo para escuchar');
@@ -378,28 +409,19 @@ function trimHistory() {
     }
 }
 
-// ─── Cola de reproducción FIFO ───────────────────────────────────────────────
-function playNextAudio() {
-    // No-op: legacy function kept for safety. Playback is now handled by
-    // enqueueAudioBuffer via AudioContext scheduling.
-}
-
 // ─── Barge-in: detener audio y notificar backend ──────────────────────────────
 function cancelPlayback() {
-    // Stop AudioContext playback by suspending (stops all scheduled sources)
-    if (audioCtx && audioCtx.state === 'running') {
-        audioCtx.suspend();
-        // Close and null out so next getAudioContext() creates a fresh one
+    // Kill AudioContext — stops all scheduled sources immediately
+    if (audioCtx && audioCtx.state !== 'closed') {
         audioCtx.close().catch(() => {});
         audioCtx = null;
         nextPlayTime = 0;
     }
 
-    // Discard all buffered sentence chunks
-    audioChunkBuffers = {};
-    activeSentenceId  = null;
-    audioQueue        = [];
-    isPlaying         = false;
+    // Reset ordered-playback state
+    pendingSentences = {};
+    nextSentenceId   = 0;
+    isPlaying        = false;
     btn.classList.remove('playing');
 
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -436,38 +458,32 @@ function connectWebSocket() {
     };
 
     ws.onmessage = (event) => {
-        // ── Binary message: PCM int16 raw audio chunk ──────────────────────
+        // ── Binary: raw PCM int16 chunk ────────────────────────────────────
         if (event.data instanceof ArrayBuffer) {
             handleBinaryChunk(event.data);
             return;
         }
 
-        // ── Text message: control JSON ─────────────────────────────────────
+        // ── Text: control JSON ─────────────────────────────────────────────
         try {
             const msg = JSON.parse(event.data);
 
             if (msg.type === 'audio_format') {
-                // Store stream format announced by server at connect
                 audioFormat.sampleRate = msg.sample_rate || 24000;
                 audioFormat.channels   = msg.channels    || 1;
                 audioFormat.dtype      = msg.dtype        || 'int16';
                 console.log('[ws] Audio format:', audioFormat);
 
             } else if (msg.type === 'audio_chunk_start') {
-                // New sentence starting — open a buffer for it
+                // Open a new ordered buffer for this sentence
                 const sid = msg.sentence_id;
-                audioChunkBuffers[sid] = [];
-                activeSentenceId = sid;
-                console.log(`[tts] Sentence #${sid} starting`);
+                pendingSentences[sid] = { chunks: [], done: false };
+                console.log(`[tts] Sentence #${sid} start`);
 
             } else if (msg.type === 'audio_chunk_end') {
-                // Sentence complete — assemble and enqueue for playback
                 const sid = msg.sentence_id;
-                if (audioChunkBuffers[sid]) {
-                    enqueueStreamedSentence(sid);
-                }
-                if (activeSentenceId === sid) activeSentenceId = null;
-                console.log(`[tts] Sentence #${sid} done (${msg.chunk_count} chunks)`);
+                console.log(`[tts] Sentence #${sid} end (${msg.chunk_count} chunks)`);
+                onSentenceEnd(sid);
 
             } else if (msg.type === 'transcript') {
                 pendingUserText = msg.text;
