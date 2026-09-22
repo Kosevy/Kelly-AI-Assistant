@@ -76,6 +76,14 @@ class Settings(BaseSettings):
         default="voice_sample.wav",
         description="Path to the voice sample WAV file for zero-shot cloning",
     )
+    tts_stream_chunk_size: int = Field(
+        default=20,
+        description="GPT tokens per streaming chunk in inference_stream (smaller = lower latency)",
+    )
+    tts_stream_timeout_s: float = Field(
+        default=30.0,
+        description="Per-sentence timeout for TTS streaming (seconds)",
+    )
 
     # ─── Server ───────────────────────────────────────────────────────────
     host: str = Field(default="0.0.0.0", description="FastAPI host address")

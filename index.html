@@ -210,12 +210,134 @@ const clearBtn     = document.getElementById('clearBtn');
 // ─── Estado ───────────────────────────────────────────────────────────────────
 let mediaRecorder  = null;
 let audioChunks    = [];
-let audioQueue     = [];      // URLs de ObjectURL pendientes
+let audioQueue     = [];      // Queue of AudioBuffer objects for playback
 let isPlaying      = false;
-let currentAudio   = null;    // Audio en reproducción actual
 let ws             = null;
 
-// ─── B3: Historial de conversación (solo en memoria, se reinicia con la pestaña)
+// ─── PCM streaming state (T4) ─────────────────────────────────────────────
+// keyed by sentence_id; each entry is an array of ArrayBuffer chunks
+let audioChunkBuffers = {};
+let activeSentenceId  = null;
+let audioCtx          = null;    // AudioContext (lazy init to satisfy autoplay policy)
+let nextPlayTime      = 0;       // Scheduling clock for gapless playback
+let audioFormat       = { sampleRate: 24000, channels: 1, dtype: 'int16' };
+
+function getAudioContext() {
+    if (!audioCtx || audioCtx.state === 'closed') {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: audioFormat.sampleRate,
+        });
+        nextPlayTime = audioCtx.currentTime;
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    return audioCtx;
+}
+
+/**
+ * Called for every binary WebSocket message.
+ * Routes to the currently-active sentence buffer.
+ * Backward-compatible: if buffer starts with RIFF (WAV), falls back to old path.
+ */
+function handleBinaryChunk(arrayBuffer) {
+    // Backward-compat: WAV header starts with 0x52 0x49 0x46 0x46 ("RIFF")
+    const view = new DataView(arrayBuffer);
+    if (view.byteLength >= 4 && view.getUint32(0, false) === 0x52494646) {
+        // Legacy WAV fallback
+        const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
+        getAudioContext().decodeAudioData(
+            arrayBuffer.slice(0),  // decodeAudioData detaches the buffer; use a copy
+            (decoded) => enqueueAudioBuffer(decoded),
+            (e) => console.error('[audio] WAV decode error:', e)
+        );
+        return;
+    }
+
+    // PCM int16 streaming path
+    if (activeSentenceId !== null && audioChunkBuffers[activeSentenceId]) {
+        audioChunkBuffers[activeSentenceId].push(arrayBuffer);
+    } else {
+        // No active sentence frame — ignore stale chunk
+        console.warn('[audio] Binary chunk received with no active sentence buffer');
+    }
+}
+
+/**
+ * Called on audio_chunk_end: assemble all PCM chunks for a sentence,
+ * decode int16 -> float32, and schedule for playback.
+ */
+function enqueueStreamedSentence(sid) {
+    const chunks = audioChunkBuffers[sid];
+    if (!chunks || chunks.length === 0) {
+        delete audioChunkBuffers[sid];
+        return;
+    }
+
+    // Concatenate all ArrayBuffers
+    const totalBytes = chunks.reduce((acc, b) => acc + b.byteLength, 0);
+    const combined   = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+    }
+    delete audioChunkBuffers[sid];
+
+    // Int16 -> float32
+    const int16View   = new Int16Array(combined.buffer);
+    const numSamples  = int16View.length;
+    const ctx         = getAudioContext();
+    const audioBuffer = ctx.createBuffer(
+        audioFormat.channels,
+        numSamples,
+        audioFormat.sampleRate
+    );
+    const float32 = audioBuffer.getChannelData(0);
+    for (let i = 0; i < numSamples; i++) {
+        float32[i] = int16View[i] / 32767;
+    }
+
+    enqueueAudioBuffer(audioBuffer);
+}
+
+/**
+ * Schedule an AudioBuffer for gapless sequential playback.
+ */
+function enqueueAudioBuffer(audioBuffer) {
+    const ctx  = getAudioContext();
+    const now  = ctx.currentTime;
+
+    // If we're behind (first chunk, or after a gap), start immediately
+    if (nextPlayTime < now + 0.05) {
+        nextPlayTime = now + 0.05;
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+    source.start(nextPlayTime);
+
+    // Advance clock
+    nextPlayTime += audioBuffer.duration;
+
+    btn.classList.add('playing');
+    setStatus('Reproduciendo...');
+    isPlaying = true;
+
+    source.onended = () => {
+        const currentNow = ctx.currentTime;
+        // Only set idle when nothing is scheduled ahead
+        if (nextPlayTime <= currentNow + 0.1) {
+            isPlaying = false;
+            btn.classList.remove('playing');
+            setStatus('Listo para escuchar');
+            nextPlayTime = 0;
+        }
+    };
+}
+
+// ─── B3: Historial de conversación ────────────────────────────────────────────
 let conversationHistory = [];  // [{role: "user"|"assistant", content: "..."}]
 const MAX_TURNS = 6;           // Máximo de turnos a mantener (= 12 mensajes)
 let pendingUserText = null;    // Texto transcrito, esperando respuesta del LLM
@@ -258,48 +380,26 @@ function trimHistory() {
 
 // ─── Cola de reproducción FIFO ───────────────────────────────────────────────
 function playNextAudio() {
-    if (audioQueue.length === 0) {
-        isPlaying = false;
-        currentAudio = null;
-        btn.classList.remove('playing');
-        setStatus('Listo para escuchar');
-        return;
-    }
-    if (isPlaying) return;
-
-    isPlaying = true;
-    btn.classList.add('playing');
-    setStatus('Reproduciendo...');
-
-    const audioUrl = audioQueue.shift();
-    currentAudio = new Audio(audioUrl);
-
-    currentAudio.play().catch(e => {
-        console.error('Error de reproducción:', e);
-        URL.revokeObjectURL(audioUrl);
-        isPlaying = false;
-        currentAudio = null;
-        playNextAudio();
-    });
-
-    currentAudio.onended = () => {
-        URL.revokeObjectURL(audioUrl);  // evita memory leak
-        isPlaying = false;
-        currentAudio = null;
-        playNextAudio();
-    };
+    // No-op: legacy function kept for safety. Playback is now handled by
+    // enqueueAudioBuffer via AudioContext scheduling.
 }
 
 // ─── Barge-in: detener audio y notificar backend ──────────────────────────────
 function cancelPlayback() {
-    if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        currentAudio = null;
+    // Stop AudioContext playback by suspending (stops all scheduled sources)
+    if (audioCtx && audioCtx.state === 'running') {
+        audioCtx.suspend();
+        // Close and null out so next getAudioContext() creates a fresh one
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+        nextPlayTime = 0;
     }
-    audioQueue.forEach(url => URL.revokeObjectURL(url));
-    audioQueue = [];
-    isPlaying = false;
+
+    // Discard all buffered sentence chunks
+    audioChunkBuffers = {};
+    activeSentenceId  = null;
+    audioQueue        = [];
+    isPlaying         = false;
     btn.classList.remove('playing');
 
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -336,30 +436,47 @@ function connectWebSocket() {
     };
 
     ws.onmessage = (event) => {
-        // Binario = chunk de audio WAV
+        // ── Binary message: PCM int16 raw audio chunk ──────────────────────
         if (event.data instanceof ArrayBuffer) {
-            const blob = new Blob([event.data], { type: 'audio/wav' });
-            const audioUrl = URL.createObjectURL(blob);
-            audioQueue.push(audioUrl);
-            playNextAudio();
+            handleBinaryChunk(event.data);
             return;
         }
 
-        // Texto = mensaje de control JSON
+        // ── Text message: control JSON ─────────────────────────────────────
         try {
             const msg = JSON.parse(event.data);
 
-            if (msg.type === 'transcript') {
-                // STT completado: el servidor nos dice qué reconoció
+            if (msg.type === 'audio_format') {
+                // Store stream format announced by server at connect
+                audioFormat.sampleRate = msg.sample_rate || 24000;
+                audioFormat.channels   = msg.channels    || 1;
+                audioFormat.dtype      = msg.dtype        || 'int16';
+                console.log('[ws] Audio format:', audioFormat);
+
+            } else if (msg.type === 'audio_chunk_start') {
+                // New sentence starting — open a buffer for it
+                const sid = msg.sentence_id;
+                audioChunkBuffers[sid] = [];
+                activeSentenceId = sid;
+                console.log(`[tts] Sentence #${sid} starting`);
+
+            } else if (msg.type === 'audio_chunk_end') {
+                // Sentence complete — assemble and enqueue for playback
+                const sid = msg.sentence_id;
+                if (audioChunkBuffers[sid]) {
+                    enqueueStreamedSentence(sid);
+                }
+                if (activeSentenceId === sid) activeSentenceId = null;
+                console.log(`[tts] Sentence #${sid} done (${msg.chunk_count} chunks)`);
+
+            } else if (msg.type === 'transcript') {
                 pendingUserText = msg.text;
                 addHistoryEntry(msg.text, 'user');
-                // Añadir al historial de conversación
                 conversationHistory.push({ role: 'user', content: msg.text });
                 trimHistory();
-                console.log('[history] Usuario:', msg.text);
+                console.log('[history] User:', msg.text);
 
             } else if (msg.type === 'assistant_text') {
-                // Respuesta completa del LLM
                 if (msg.text) {
                     conversationHistory.push({ role: 'assistant', content: msg.text });
                     trimHistory();
@@ -376,7 +493,7 @@ function connectWebSocket() {
                 addHistoryEntry(`Error: ${msg.message}`, 'system');
             }
         } catch {
-            // No es JSON, ignorar
+            // Not JSON, ignore
         }
     };
 }
