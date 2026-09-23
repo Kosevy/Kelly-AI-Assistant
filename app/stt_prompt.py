@@ -68,3 +68,4 @@ def build_initial_prompt(
         recent = recent[-max_chars:]
 
     return recent
+
