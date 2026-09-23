@@ -80,6 +80,7 @@ from TTS.api import TTS
 import pysbd
 
 from app.text_preprocess import normalize_for_tts
+from app.stt_prompt import build_initial_prompt
 
 # ─── 5. Model initialization ──────────────────────────────────────────────────
 logger.info("[startup] Loading STT model (faster-whisper)...")
@@ -156,8 +157,64 @@ logger.info(
     f"timeout={settings.tts_stream_timeout_s}s"
 )
 
-# ─── 10. FastAPI app ──────────────────────────────────────────────────────────
-app = FastAPI(title="Kelly Voice Assistant", version="0.4.0")
+# ─── 10. FastAPI app with startup lifespan ────────────────────────────────────
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """
+    FastAPI lifespan handler: runs _warmup_llm() before serving requests.
+
+    Why warmup matters:
+      llama-server lazy-loads model weights on the first request. That first
+      prefill can take 10-15 s on CPU (full context allocation + weight loading).
+      Pre-warming eliminates this cold-start latency so every user interaction
+      has consistent TTFT, which is critical for a voice assistant where
+      multi-second delays feel like the app is broken.
+
+    Why only 3 tokens:
+      We want to trigger weight loading, not generate a real response.
+      3 tokens is the minimum to force a full prefill cycle. stream=False avoids
+      keeping a connection open unnecessarily.
+
+    Why not block startup:
+      If llama-server isn't up yet (race condition), we warn and continue.
+      The health endpoint will report LLM as degraded and clients will retry.
+    """
+    await _warmup_llm()
+    yield
+    # No teardown needed — models are cleaned up by the OS on process exit.
+
+
+async def _warmup_llm() -> None:
+    """
+    Send a trivial prompt to llama-server to force KV-cache warm-up.
+    Non-blocking: logs warning on failure, never raises.
+    """
+    logger.info("[startup] LLM warmup — triggering KV cache load...")
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                settings.llm_server_url,
+                json={
+                    # Minimal ChatML prompt matching Qwen2.5-Instruct format
+                    "prompt": "<|im_start|>user\nhola<|im_end|>\n<|im_start|>assistant\n",
+                    "n_predict": 3,
+                    "temperature": 0.0,
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+        logger.info("[startup] LLM warmup complete — model loaded in KV cache")
+    except Exception as exc:
+        logger.warning(
+            f"[startup] LLM warmup failed (non-fatal — first query may be slow): {exc}"
+        )
+
+
+app = FastAPI(title="Kelly Voice Assistant", version="0.5.0", lifespan=_lifespan)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -258,17 +315,49 @@ def _synthesize_sentence_sync(text: str) -> bytes:
     return byte_io.getvalue()
 
 
-def _transcribe_audio(audio_bytes: bytes) -> str:
+def _transcribe_audio(
+    audio_bytes: bytes,
+    history: list[dict[str, str]] | None = None,
+) -> str:
     """
-    Transcribe audio with faster-whisper + VAD.
+    Transcribe audio bytes with faster-whisper.
+
+    Accepts conversation history to build a dynamic initial_prompt.
+    All decoding parameters are pulled from settings (externalizable via .env).
+
+    Why initial_prompt from history:
+      Whisper's decoder biases toward vocabulary/topics in initial_prompt.
+      Using the user's own recent words (not Kelly's responses — those are TTS,
+      not audio the model has seen) anchors the decoder to the current topic
+      without any hardcoding. Effect is strongest on the first 1-2 words of each
+      utterance, which is exactly where the systematic errors were observed.
+
     Synchronous — call via asyncio.to_thread().
     """
     audio_stream = io.BytesIO(audio_bytes)
     vad_params = {"min_silence_duration_ms": settings.stt_vad_min_silence_ms}
 
-    segments, info = stt_model.transcribe(
+    # Build dynamic initial_prompt from recent user history
+    initial_prompt = build_initial_prompt(
+        history or [],
+        max_chars=settings.stt_initial_prompt_max_chars,
+    )
+    if initial_prompt:
+        logger.debug(
+            f"[stt] initial_prompt ({len(initial_prompt)} chars): "
+            f"\"{initial_prompt[:100]}{'...' if len(initial_prompt) > 100 else ''}\""
+        )
+    else:
+        logger.debug("[stt] initial_prompt: empty (no history yet)")
+
+    segments, _info = stt_model.transcribe(
         audio_stream,
         language=settings.stt_language,
+        initial_prompt=initial_prompt if initial_prompt else None,
+        beam_size=settings.stt_beam_size,
+        temperature=settings.stt_temperature_fallback,
+        no_speech_threshold=settings.stt_no_speech_threshold,
+        condition_on_previous_text=settings.stt_condition_on_previous_text,
         vad_filter=settings.stt_vad_filter,
         vad_parameters=vad_params if settings.stt_vad_filter else None,
     )
@@ -660,7 +749,9 @@ async def _run_pipeline(
 
     # ── STT ───────────────────────────────────────────────────────────────────
     logger.debug(f"[pipeline] STT started ({len(audio_bytes)} bytes)")
-    user_text = await asyncio.to_thread(_transcribe_audio, audio_bytes)
+    # Pass history so _transcribe_audio can build a dynamic initial_prompt,
+    # biasing Whisper's decoder toward vocabulary from the current conversation.
+    user_text = await asyncio.to_thread(_transcribe_audio, audio_bytes, history)
     t_stt_done = time.perf_counter()
     stt_latency_ms = (t_stt_done - t_start) * 1000
 
@@ -854,9 +945,31 @@ async def _run_pipeline(
 
 # ─── HTTP Endpoints ───────────────────────────────────────────────────────────
 
+from fastapi.staticfiles import StaticFiles
+
+# Serve /static/* for PWA assets (icons, service worker, etc.)
+# Mounted before route handlers so FastAPI resolves them first.
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
 @app.get("/")
 async def get_index():
     return FileResponse("index.html")
+
+
+@app.get("/manifest.json", include_in_schema=False)
+async def get_manifest():
+    """
+    Serve the PWA web app manifest.
+
+    Dedicated endpoint (not StaticFiles) to ensure Content-Type is
+    application/manifest+json, which Chrome requires for installability.
+    """
+    return FileResponse(
+        "static/manifest.json",
+        media_type="application/manifest+json",
+    )
+
 
 
 @app.get("/health")

@@ -33,6 +33,53 @@ class Settings(BaseSettings):
         default=500, description="Minimum silence duration for VAD (ms)"
     )
 
+    # STT decoding quality parameters.
+    # These expose native Whisper/faster-whisper knobs that are critical for
+    # accuracy but were previously left at library defaults (often suboptimal).
+    # Externalized here so they can be tuned via .env without touching logic.
+
+    stt_beam_size: int = Field(
+        default=5,
+        description=(
+            "Beam search width. 1 = greedy (fastest, least accurate). "
+            "5 = Whisper's original default; ~1.5x slower than greedy but "
+            "measurably more accurate for short conversational utterances."
+        ),
+    )
+    stt_temperature_fallback: tuple[float, ...] = Field(
+        default=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+        description=(
+            "Progressive temperature fallback schedule. Whisper starts at T=0 "
+            "(deterministic greedy) and retries with increasing T if the "
+            "segment has low log-probability or high compression ratio. "
+            "This is Whisper's documented fallback strategy — not a custom hack."
+        ),
+    )
+    stt_no_speech_threshold: float = Field(
+        default=0.6,
+        description=(
+            "Minimum no-speech probability to treat a segment as silence. "
+            "Whisper's default is 0.6. Lower = more sensitive (may flag speech "
+            "as silence). Higher = less sensitive (may transcribe silence)."
+        ),
+    )
+    stt_condition_on_previous_text: bool = Field(
+        default=True,
+        description=(
+            "Whether Whisper conditions each new segment on the decoded text "
+            "of the previous segment. True (Whisper default) improves coherence "
+            "within a single long recording. Consistent with initial_prompt usage."
+        ),
+    )
+    stt_initial_prompt_max_chars: int = Field(
+        default=224,
+        description=(
+            "Maximum character length for the dynamic initial_prompt built from "
+            "conversation history. Chosen to fit within Whisper's ~224-token "
+            "context window (~4 chars/token for Spanish)."
+        ),
+    )
+
     # ─── LLM (Language Model) ─────────────────────────────────────────────
     llm_server_url: str = Field(
         default="http://127.0.0.1:8085/completion",

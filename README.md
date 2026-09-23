@@ -241,9 +241,61 @@ Browsers restrict microphone capture over insecure HTTP on non-localhost origins
 - Access the app via `https://...` instead of `http://...`.
 
 ### Speech-to-Text Recognition Quality
+
 If transcriptions cut off early or miss speech:
-- Lower the minimum silence duration in `.env`: `KELLY_STT_VAD_MIN_SILENCE_MS=300`.
-- Enable audio debugging in `.env`: `KELLY_DEBUG_SAVE_AUDIO=true` and inspect captured files in `debug/`.
+- Lower the minimum silence duration: `KELLY_STT_VAD_MIN_SILENCE_MS=300`
+- Enable audio debugging: `KELLY_DEBUG_SAVE_AUDIO=true` → inspect files in `debug/`
+
+---
+
+## STT: Configuration and Design Decisions
+
+### Dynamic `initial_prompt` from Conversation History
+
+**Problem observed:** Whisper `small` systematically corrupted the first 1–2 words of utterances ("Hola Kelly" → "con lo que le comestas").
+
+**Solution:** [`app/stt_prompt.py`](app/stt_prompt.py) builds a dynamic `initial_prompt` from the last 2 user messages in the conversation history, passed to Whisper's decoder on every transcription call.
+
+**Why this approach (not alternatives):**
+- **Not a static vocabulary list:** Would require manual maintenance every time topics change. Breaks when the user discusses anything not pre-listed.
+- **Not a larger model:** Valid long-term option but doubles latency and RAM. Not warranted until dynamic prompting is benchmarked. See "Pending Decision" below.
+- **Dynamic history prompt:** Whisper's `initial_prompt` biases beam search toward vocabulary the user has already used in the current conversation. Effect is strongest at utterance boundaries (where errors concentrated). Automatically adapts to any topic. Zero maintenance.
+
+Only **user messages** are used — Kelly's responses are TTS-synthesized audio the model has never processed, so including them would add irrelevant decoder bias.
+
+### Decoding Parameters
+
+All parameters are externalized via `.env` (prefix `KELLY_STT_`). No tuning requires code changes.
+
+| Parameter | Default | Rationale |
+|---|---|---|
+| `STT_BEAM_SIZE` | `5` | Whisper's original default. `1` = greedy (faster but less accurate). `5` = beam search with measurably better first-word accuracy on short conversational utterances. |
+| `STT_TEMPERATURE_FALLBACK` | `0.0,0.2,0.4,...,1.0` | Whisper's documented progressive fallback strategy. Starts deterministic (T=0), retries with increasing randomness only when the decoder's confidence score falls below threshold. Not a custom hack — this is the published algorithm. |
+| `STT_NO_SPEECH_THRESHOLD` | `0.6` | Whisper default. Controls silence detection sensitivity. Lower = more likely to discard real speech; higher = more likely to transcribe background noise. |
+| `STT_CONDITION_ON_PREVIOUS_TEXT` | `true` | Enables intra-utterance context from Whisper's internal decoded text. Consistent with `initial_prompt` usage. |
+| `STT_INITIAL_PROMPT_MAX_CHARS` | `224` | Chosen to stay within Whisper's ~224-token context window (Spanish averages ~4 chars/token, so 224 chars ≈ 56 tokens — well within budget). |
+
+### Benchmark Tool
+
+Run `benchmarks/stt_bench.py` against saved debug audio files to measure transcription accuracy before and after configuration changes:
+
+```powershell
+# Capture audio first
+# Set KELLY_DEBUG_SAVE_AUDIO=true in .env, speak to Kelly, then:
+.venv\Scripts\python.exe benchmarks\stt_bench.py --output benchmarks\stt_baseline.json
+
+# Compare with and without initial_prompt on a specific file:
+.venv\Scripts\python.exe benchmarks\stt_bench.py --audio debug\stt_001.raw --with-prompt "reglas del ajedrez"
+```
+
+### Pending Decision: Model Upgrade
+
+If accuracy remains insufficient after these improvements, evaluate `faster-whisper medium`:
+- Latency impact: ~2x STT latency (1,200–1,900 ms → ~2,500–3,500 ms)
+- RAM impact: +~1 GB RAM
+- Accuracy: significantly better on Spanish conversational speech
+
+**Do not upgrade the model without first running the STT benchmark** — the dynamic `initial_prompt` + beam search changes may already be sufficient.
 
 ---
 
