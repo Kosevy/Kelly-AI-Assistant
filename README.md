@@ -35,6 +35,7 @@ Browser Audio Queue (FIFO + Real-Time Barge-In Support)
 ### Key Technical Highlights
 - **Sentence-Level Pipeline Overlap:** Streams tokens from the LLM, splits sentences on punctuation boundaries with `pysbd`, and feeds individual sentences directly to the TTS engine before the LLM has finished generating the full response.
 - **Cached Voice Conditioning Latents:** Pre-computes and caches speaker latents (`gpt_cond_latent`, `speaker_embedding`) from a single 6–10 second voice sample at server startup, eliminating redundant recalculations on every phrase.
+- **Symmetric Component Warmup:** At startup, Kelly sequentially warm-starts the LLM (KV cache), STT (kernel compile + weight load), and TTS (CUDA kernel compile + VRAM allocation). The first user interaction has the same latency as subsequent ones.
 - **Client-Side Conversational Memory:** Maintains multi-turn context (up to 6 turns / 2,048 estimated tokens) in frontend session memory formatted as ChatML. Memory resets on page refresh to ensure session privacy.
 - **Instant Barge-In (Interruption):** Holding or clicking the mic button halts current audio playback in the browser, purges the playback queue, and sends a control event (`{"type": "cancel"}`) to immediately abort active LLM generation and TTS synthesis in the backend.
 - **Phonetic & Text Preprocessing:** Custom normalizer resolves common XTTS audio artifacts (mumbling, letter fade-outs, raw numeric strings, unpronounceable symbols, and markdown).
@@ -296,6 +297,44 @@ If accuracy remains insufficient after these improvements, evaluate `faster-whis
 - Accuracy: significantly better on Spanish conversational speech
 
 **Do not upgrade the model without first running the STT benchmark** — the dynamic `initial_prompt` + beam search changes may already be sufficient.
+
+---
+
+## Warmup and Latency
+
+### Startup Warmup (Cold-Start Elimination)
+
+At startup, Kelly sequentially pre-warms all three inference components before accepting requests. This eliminates the cold-start penalty where lazy-loaded models produce the first response 2–5× slower than subsequent ones.
+
+| Component | Warmup Mechanism | Why |
+|---|---|---|
+| **LLM** | POST 3-token trivial prompt to llama-server | Forces model weight load and KV cache allocation |
+| **STT** | Transcribe 0.5 s synthetic silence (16 kHz) | Triggers CTranslate2 lazy-load + int8 kernel compile |
+| **TTS** | Consume first `inference_stream()` chunk of "Hola." | Triggers XTTS GPT-2 autoregressive path + HiFiGAN CUDA kernels |
+
+All warmups are **non-blocking**: a failure produces a warning log and startup continues. The first user interaction may be slower if a warmup fails.
+
+Warmups run **sequentially** (LLM → STT → TTS). Parallel warmup would make cold-start timing unpredictable and harder to diagnose when something fails.
+
+### E2E Latency Breakdown
+
+Kelly instruments both backend and frontend with timestamps at every pipeline boundary. To capture a full breakdown:
+
+**Backend** — enable DEBUG logging (`KELLY_LOG_LEVEL=DEBUG`) and look for `[timing]` lines:
+```
+[timing] recv→stt: 1376ms | stt→llm_http: 12ms | llm_ttft: 768ms | llm→tts_enqueue: 0ms | tts_first_chunk: 566ms | total_BE: 2722ms | e2e_BE(sum): 2722ms
+```
+
+**Frontend** — open DevTools → Console and filter by `[FE timing]`:
+```
+[FE timing] send→transcript: 1400ms | send→first_byte: 2750ms | first_byte→play: 80ms | total send→play: 2830ms
+```
+
+**Interpreting the gap:** The `e2e_first_audio_ms` metric measures backend time only (recv→first-PCM-chunk-sent). The full user-perceived latency adds:
+- Network round-trip (WS): typically <10 ms on localhost, <50 ms over Tailscale LAN
+- Frontend: PCM decode + AudioContext scheduling (`first_byte→play`, typically 50–150 ms)
+
+> Fill in your measured values here after running with DEBUG logging enabled.
 
 ---
 
