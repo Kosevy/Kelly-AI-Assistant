@@ -223,6 +223,24 @@ let audioFormat   = { sampleRate: 24000, channels: 1, dtype: 'int16' };
 let nextSentenceId   = 0;           // Next sentence_id we expect to play
 let pendingSentences = {};           // sentence_id -> { chunks: ArrayBuffer[], done: bool }
 
+// ─── E2E timing state (diagnosing the gap between components and e2e) ─────────
+// These mirror the backend [timing] log, covering the frontend half of the round-trip.
+// Read: Open DevTools → Console, filter by "[FE timing]" to see the breakdown.
+//
+//   t_send      : audio blob sent over WebSocket (end of PTT recording)
+//   t_transcript: transcript JSON received (STT done on server)
+//   t_first_byte: first PCM binary chunk received from WS
+//   t_play_start: AudioContext.currentTime when first buffer starts playing
+//
+// The gap between t_send and t_first_byte is roughly equal to the backend's
+// e2e_BE(sum) from the [timing] log. Any remaining gap vs e2e_first_audio_ms
+// lives in the frontend: t_first_byte → t_play_start (decode + schedule delay).
+let t_send       = null;   // performance.now() when audio was sent
+let t_transcript = null;   // performance.now() when transcript arrived
+let t_first_byte = null;   // performance.now() when first PCM chunk arrived
+let t_play_start = null;   // performance.now() when first buffer starts
+let _fe_timing_logged = false;  // only log once per interaction
+
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({
@@ -242,6 +260,11 @@ function getAudioContext() {
  * Backward-compatible: RIFF-header WAV is decoded and scheduled directly.
  */
 function handleBinaryChunk(arrayBuffer) {
+    // First binary chunk of this interaction — record arrival time for FE timing
+    if (t_first_byte === null) {
+        t_first_byte = performance.now();
+    }
+
     // Backward-compat: WAV starts with 0x52494646 "RIFF"
     const view = new DataView(arrayBuffer);
     if (view.byteLength >= 4 && view.getUint32(0, false) === 0x52494646) {
@@ -350,6 +373,24 @@ function scheduleAudioBuffer(audioBuffer, onEnded = null) {
     source.buffer = audioBuffer;
     source.connect(ctx.destination);
     source.start(nextPlayTime);
+
+    // Log FE timing breakdown once per interaction (at first buffer play)
+    if (!_fe_timing_logged && t_send !== null) {
+        _fe_timing_logged = true;
+        t_play_start = performance.now();
+        const total      = t_play_start - t_send;
+        const toTranscript = t_transcript !== null ? (t_transcript - t_send).toFixed(0) : '?';
+        const toByte       = t_first_byte  !== null ? (t_first_byte  - t_send).toFixed(0) : '?';
+        const toPlay       = (t_play_start - t_send).toFixed(0);
+        const byteToPlay   = t_first_byte  !== null ? (t_play_start - t_first_byte).toFixed(0) : '?';
+        console.log(
+            `[FE timing] send→transcript: ${toTranscript}ms` +
+            ` | send→first_byte: ${toByte}ms` +
+            ` | first_byte→play: ${byteToPlay}ms` +
+            ` | total send→play: ${toPlay}ms`
+        );
+    }
+
     nextPlayTime += audioBuffer.duration;
 
     btn.classList.add('playing');
@@ -425,6 +466,10 @@ function cancelPlayback() {
     isPlaying        = false;
     btn.classList.remove('playing');
 
+    // Reset FE timing so a barge-in doesn't bleed stale timestamps into the next interaction
+    t_send = null; t_transcript = null; t_first_byte = null;
+    t_play_start = null; _fe_timing_logged = false;
+
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'cancel' }));
     }
@@ -487,6 +532,7 @@ function connectWebSocket() {
                 onSentenceEnd(sid);
 
             } else if (msg.type === 'transcript') {
+                t_transcript = performance.now();   // [FE timing] STT done, transcript received
                 pendingUserText = msg.text;
                 addHistoryEntry(msg.text, 'user');
                 conversationHistory.push({ role: 'user', content: msg.text });
@@ -540,9 +586,12 @@ navigator.mediaDevices.getUserMedia({ audio: true, video: false })
             audioChunks = [];
             setStatus('Procesando...');
 
+            // Reset FE timing state for this interaction
+            t_send = null; t_transcript = null; t_first_byte = null;
+            t_play_start = null; _fe_timing_logged = false;
+
             // B3: Enviar historial ANTES del audio binario
-            // Solo enviar si hay historial (no el primer turno)
-            const historyToSend = conversationHistory.slice(); // copia
+            const historyToSend = conversationHistory.slice();
             if (historyToSend.length > 0) {
                 ws.send(JSON.stringify({
                     type: 'audio_with_history',
@@ -550,8 +599,11 @@ navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                 }));
             }
 
-            // Enviar el audio binario
-            blob.arrayBuffer().then(buf => ws.send(buf));
+            // Enviar el audio binario y capturar t_send cuando sale por el WS
+            blob.arrayBuffer().then(buf => {
+                ws.send(buf);
+                t_send = performance.now();  // [FE timing] audio sent, pipeline starts
+            });
         };
 
         // ── Push-to-Talk handlers ──────────────────────────────────────────
