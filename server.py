@@ -165,32 +165,39 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """
-    FastAPI lifespan handler: runs _warmup_llm() before serving requests.
+    FastAPI lifespan: warm up all three inference components before serving.
 
-    Why warmup matters:
-      llama-server lazy-loads model weights on the first request. That first
-      prefill can take 10-15 s on CPU (full context allocation + weight loading).
-      Pre-warming eliminates this cold-start latency so every user interaction
-      has consistent TTFT, which is critical for a voice assistant where
-      multi-second delays feel like the app is broken.
+    Order: LLM → STT → TTS (sequential, not parallel).
 
-    Why only 3 tokens:
-      We want to trigger weight loading, not generate a real response.
-      3 tokens is the minimum to force a full prefill cycle. stream=False avoids
-      keeping a connection open unnecessarily.
+    Why sequential:
+      Each warmup exercises a different subsystem but all compete for the same
+      resources (RAM bandwidth, CUDA driver, disk I/O). Parallel warmups can
+      produce deadlocks or misleading timing. Sequential is deterministic and
+      easier to diagnose when one component fails.
 
-    Why not block startup:
-      If llama-server isn't up yet (race condition), we warn and continue.
-      The health endpoint will report LLM as degraded and clients will retry.
+    Why warmup at all:
+      All three components lazy-load internal state on the first real call.
+      Without warmup, the first user interaction takes 2-5x longer than
+      subsequent ones — unacceptable for a voice assistant where cold-start
+      latency feels like the app is broken.
     """
     await _warmup_llm()
+    await _warmup_stt()
+    await _warmup_tts()
+    logger.info("[startup] All warmups complete — Kelly ready to serve")
     yield
-    # No teardown needed — models are cleaned up by the OS on process exit.
+    # No teardown: models are freed by the OS on process exit.
 
 
 async def _warmup_llm() -> None:
     """
     Send a trivial prompt to llama-server to force KV-cache warm-up.
+
+    Why 3 tokens / stream=False:
+      Triggers the full prefill cycle (weight loading + KV allocation) without
+      generating a long response. stream=False avoids leaving an HTTP connection
+      open. Without this, first-query TTFT is ~7,987 ms; with it ~380-800 ms.
+
     Non-blocking: logs warning on failure, never raises.
     """
     logger.info("[startup] LLM warmup — triggering KV cache load...")
@@ -199,7 +206,6 @@ async def _warmup_llm() -> None:
             resp = await client.post(
                 settings.llm_server_url,
                 json={
-                    # Minimal ChatML prompt matching Qwen2.5-Instruct format
                     "prompt": "<|im_start|>user\nhola<|im_end|>\n<|im_start|>assistant\n",
                     "n_predict": 3,
                     "temperature": 0.0,
@@ -212,6 +218,82 @@ async def _warmup_llm() -> None:
         logger.warning(
             f"[startup] LLM warmup failed (non-fatal — first query may be slow): {exc}"
         )
+
+
+async def _warmup_stt() -> None:
+    """
+    Transcribe a short synthetic silence to force faster-whisper lazy-loading.
+
+    Why silence:
+      faster-whisper lazy-loads CTranslate2 model weights on first transcribe().
+      The first call also compiles internal int8 kernels (CPU). Both costs add
+      ~1,000-1,500 ms on first real audio. Synthetic silence exercises the full
+      transcription path without needing real audio.
+
+    Why vad_filter=False:
+      VAD would immediately discard silence before the model is even invoked.
+      Disabling it ensures the warmup reaches the actual transcription kernels.
+
+    Non-blocking: logs warning on failure, never raises.
+    """
+    import numpy as np
+
+    logger.info("[startup] STT warmup — forcing model lazy-load...")
+    try:
+        silence = np.zeros(8000, dtype=np.float32)  # 0.5 s at 16 kHz
+
+        def _run():
+            # Consume the generator so kernels actually execute
+            segments, _ = stt_model.transcribe(
+                silence,
+                language=settings.stt_language,
+                beam_size=settings.stt_beam_size,
+                vad_filter=False,           # don't discard silence before reaching kernels
+                condition_on_previous_text=False,
+            )
+            list(segments)                  # force full evaluation
+
+        await asyncio.to_thread(_run)
+        logger.info("[startup] STT warmup complete — model loaded, first inference done")
+    except Exception as exc:
+        logger.warning(f"[startup] STT warmup failed (non-fatal): {exc}")
+
+
+async def _warmup_tts() -> None:
+    """
+    Synthesize the first chunk of a trivial phrase to warm up XTTS on GPU.
+
+    Why only the first chunk:
+      The most expensive XTTS operations are (a) GPT-2 autoregressive decode
+      for the conditioning tokens, which happens before any audio is produced,
+      and (b) CUDA kernel compilation on first use. Both are triggered by
+      consuming the first chunk from inference_stream(). Generating the full
+      phrase would add ~600-800 ms of unnecessary audio synthesis.
+
+    Why 'Hola.' specifically:
+      Shortest valid Spanish utterance that exercises the full GPT+HiFiGAN
+      inference path. Any non-empty phrase works; this one is reproducible.
+
+    Non-blocking: logs warning on failure, never raises.
+    """
+    logger.info("[startup] TTS warmup — compiling CUDA kernels and allocating VRAM...")
+    try:
+        def _run():
+            stream = tts_model.synthesizer.tts_model.inference_stream(
+                "Hola.",
+                settings.stt_language,
+                gpt_cond_latent,
+                speaker_embedding,
+                stream_chunk_size=settings.tts_stream_chunk_size,
+                enable_text_splitting=False,
+            )
+            # Consume only the first chunk: triggers GPT decode + HiFiGAN kernel compile
+            next(stream, None)
+
+        await asyncio.to_thread(_run)
+        logger.info("[startup] TTS warmup complete — CUDA kernels compiled, VRAM allocated")
+    except Exception as exc:
+        logger.warning(f"[startup] TTS warmup failed (non-fatal): {exc}")
 
 
 app = FastAPI(title="Kelly Voice Assistant", version="0.5.0", lifespan=_lifespan)
@@ -942,6 +1024,36 @@ async def _run_pipeline(
         )
     logger.info(f"pipeline_metrics {json.dumps(metrics)}")
 
+    # ── Granular backend timing breakdown (DEBUG) ──────────────────────────────
+    # Purpose: diagnose the gap between sum(components) and e2e_first_audio_ms.
+    # These timestamps cover the BACKEND portion only; frontend timing is logged
+    # separately in the browser console via [FE timing] messages.
+    #
+    # Phase breakdown:
+    #   recv→stt       : includes audio save (if debug_save_audio) + transcription
+    #   stt→llm_first  : LLM cold HTTP call + server-side prefill
+    #   llm_first→tts  : token streaming until first complete sentence is enqueued
+    #   tts_enqueue→BE : time from enqueue to backend sending first PCM chunk
+    #   total_BE       : t_start to t_end (does NOT include frontend decode/play)
+    t_llm_first = t_first_token if t_first_token else t_llm_start
+    stt_to_llm_ms = (t_llm_start - t_stt_done) * 1000      # HTTP connection overhead
+    llm_to_tts_ms = (
+        (t_first_tts_enqueue - t_llm_first) * 1000
+        if t_first_tts_enqueue else 0.0
+    )
+    tts_first_chunk_ms = tts_metrics.get("tts_first_chunk_ms") or 0.0
+    total_be_ms = (t_end - t_start) * 1000
+
+    logger.debug(
+        f"[timing] recv→stt: {stt_latency_ms:.0f}ms"
+        f" | stt→llm_http: {stt_to_llm_ms:.0f}ms"
+        f" | llm_ttft: {(t_llm_first - t_llm_start)*1000:.0f}ms"
+        f" | llm→tts_enqueue: {llm_to_tts_ms:.0f}ms"
+        f" | tts_first_chunk: {tts_first_chunk_ms:.0f}ms"
+        f" | total_BE: {total_be_ms:.0f}ms"
+        f" | e2e_BE(sum): {stt_latency_ms + stt_to_llm_ms + (t_llm_first - t_llm_start)*1000 + llm_to_tts_ms + tts_first_chunk_ms:.0f}ms"
+    )
+
 
 # ─── HTTP Endpoints ───────────────────────────────────────────────────────────
 
@@ -1057,6 +1169,7 @@ async def audio_websocket(websocket: WebSocket):
 
             # ── Binary message: raw audio (WebM/Opus)
             if "bytes" in data and data["bytes"]:
+                t_recv = time.perf_counter()                # timestamp: audio arrived at server
                 history = ctx.pending_history
                 ctx.pending_history = []
 
@@ -1065,6 +1178,10 @@ async def audio_websocket(websocket: WebSocket):
                 ctx.reset()
 
                 audio_bytes = data["bytes"]
+                logger.debug(
+                    f"[timing] t_recv: audio received ({len(audio_bytes)} bytes) — "
+                    f"scheduling pipeline"
+                )
                 ctx.active_task = asyncio.create_task(
                     _run_pipeline(websocket, audio_bytes, history, ctx)
                 )
