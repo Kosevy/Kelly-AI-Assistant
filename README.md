@@ -33,9 +33,9 @@ Browser Audio Queue (FIFO + Real-Time Barge-In Support)
 ```
 
 ### Key Technical Highlights
+
 - **Sentence-Level Pipeline Overlap:** Streams tokens from the LLM, splits sentences on punctuation boundaries with `pysbd`, and feeds individual sentences directly to the TTS engine before the LLM has finished generating the full response.
 - **Cached Voice Conditioning Latents:** Pre-computes and caches speaker latents (`gpt_cond_latent`, `speaker_embedding`) from a single 6–10 second voice sample at server startup, eliminating redundant recalculations on every phrase.
-- **Symmetric Component Warmup:** At startup, Kelly sequentially warm-starts the LLM (KV cache), STT (kernel compile + weight load), and TTS (CUDA kernel compile + VRAM allocation). The first user interaction has the same latency as subsequent ones.
 - **Client-Side Conversational Memory:** Maintains multi-turn context (up to 6 turns / 2,048 estimated tokens) in frontend session memory formatted as ChatML. Memory resets on page refresh to ensure session privacy.
 - **Instant Barge-In (Interruption):** Holding or clicking the mic button halts current audio playback in the browser, purges the playback queue, and sends a control event (`{"type": "cancel"}`) to immediately abort active LLM generation and TTS synthesis in the backend.
 - **Phonetic & Text Preprocessing:** Custom normalizer resolves common XTTS audio artifacts (mumbling, letter fade-outs, raw numeric strings, unpronounceable symbols, and markdown).
@@ -47,12 +47,14 @@ Browser Audio Queue (FIFO + Real-Time Barge-In Support)
 ## Hardware & System Requirements
 
 ### Tested Reference Hardware
+
 - **GPU:** NVIDIA GeForce RTX 3060 (12 GB VRAM) — driver 610.88+, CUDA 12.6
 - **CPU:** AMD Ryzen 5 7600X (6 physical cores, 12 logical threads)
 - **RAM:** 16 GB DDR5 @ 5200 MHz
 - **OS:** Windows 10 / 11 (64-bit) with PowerShell
 
 ### Software Requirements
+
 - **Python:** Exactly **3.10.x** (3.11+ is unstable with Coqui XTTS-v2 Windows dependencies)
 - **CUDA Toolkit:** CUDA 12.1+ / 12.6 driver support
 - **CMake & Visual Studio Build Tools:** For building `llama.cpp`
@@ -63,26 +65,32 @@ Browser Audio Queue (FIFO + Real-Time Barge-In Support)
 ## Step-by-Step Installation Guide
 
 ### 1. Clone the Repository
+
 ```powershell
 git clone https://github.com/<your-username>/AssistantPrototype.git
 cd AssistantPrototype
 ```
 
 ### 2. Set Up Python 3.10 Virtual Environment
+
 ```powershell
 py -3.10 -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install PyTorch with CUDA 12.6
+
 Install the matched PyTorch and torchaudio wheels for CUDA 12.6, then install the remaining project dependencies:
+
 ```powershell
 pip install torch==2.11.0+cu126 torchaudio==2.11.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 ```
 
 ### 4. Clone and Build `llama.cpp`
+
 `llama.cpp` is decoupled from the main repository. Clone and compile it with CUDA acceleration enabled:
+
 ```powershell
 git clone https://github.com/ggerganov/llama.cpp.git
 cd llama.cpp
@@ -94,14 +102,18 @@ cd ..
 Verify that `llama.cpp\build\bin\Release\llama-server.exe` was generated successfully.
 
 ### 5. Download the LLM Weights
+
 Download the Qwen2.5-7B Instruct model in GGUF format (Q4_K_M quantization recommended):
+
 - Create the models directory if needed: `mkdir llama.cpp\models`
 - Download `qwen2.5-7b-instruct-q4_k_m.gguf` from Hugging Face into `llama.cpp\models\`.
 
-*Note: XTTS-v2 and faster-whisper small weights download automatically on first launch.*
+_Note: XTTS-v2 and faster-whisper small weights download automatically on first launch._
 
 ### 6. Prepare Voice Sample for Cloning
+
 Provide a clean reference WAV file in the project root:
+
 - **Path:** `voice_sample.wav`
 - **Duration:** 6–10 seconds of clear, natural speech
 - **Format:** Mono WAV, 22,050 Hz or 24,000 Hz, 16-bit PCM
@@ -109,31 +121,40 @@ Provide a clean reference WAV file in the project root:
 > **Privacy Note:** `voice_sample.wav` is automatically ignored by `.gitignore` to protect personal biometric voice data.
 
 ### 7. Configure Environment Variables
+
 Copy the template and adjust settings as needed:
+
 ```powershell
 Copy-Item .env.example .env
 ```
-*(All variables are documented with sensible defaults in `app/config.py` and `.env.example`.)*
+
+_(All variables are documented with sensible defaults in `app/config.py` and `.env.example`.)_
 
 ---
 
 ## Running Kelly
 
 ### Start All Services
+
 Launch both `llama-server` and the FastAPI application in synchronized windows:
+
 ```powershell
 .\start.ps1
 ```
+
 The script will:
+
 1. Verify the virtual environment and compiled binaries.
 2. Launch `llama-server` with `--threads 5 --threads-batch 5 -ngl 8` (offloading 8 layers to GPU while leaving headroom for XTTS-v2).
 3. Launch the FastAPI server on port 8000.
 4. Display local LAN and Tailscale access URLs.
 
 ### Stop All Services
+
 ```powershell
 .\stop.ps1
 ```
+
 Gracefully terminates `llama-server` and `uvicorn` processes.
 
 ---
@@ -152,13 +173,17 @@ Gracefully terminates `llama-server` and `uvicorn` processes.
 ## Benchmarking & Performance Tuning
 
 ### Run LLM Benchmark
+
 To evaluate throughput (tokens per second) and Time-To-First-Token (TTFT):
+
 ```powershell
 .venv\Scripts\python.exe benchmarks\llm_bench.py --label "threads5_ngl8"
 ```
+
 Results are saved to `benchmarks/<label>.json`.
 
 ### Tunable Parameters in `start.ps1`
+
 - `--threads <N>`: Set to physical CPU cores minus 1 (e.g., `5` on a 6-core Ryzen 5 7600X).
 - `-ngl <layers>`: GPU layers offloaded to VRAM (e.g., `8` uses ~1.5 GB extra VRAM, fitting comfortably within the ~2.8 GB free VRAM alongside XTTS-v2 on a 12 GB GPU).
 
@@ -167,17 +192,20 @@ Results are saved to `benchmarks/<label>.json`.
 ## Health Checks & Monitoring
 
 Check the status of all components at runtime:
+
 ```powershell
 curl http://localhost:8000/health
 ```
+
 Returns JSON status (`200 OK` or `503 Service Unavailable`):
+
 ```json
 {
   "status": "ok",
   "components": {
-    "stt": {"status": "ok", "model": "small", "device": "cpu"},
-    "llm": {"status": "ok", "url": "http://127.0.0.1:8085/completion"},
-    "tts": {"status": "ok", "device": "cuda", "voice_cached": true}
+    "stt": { "status": "ok", "model": "small", "device": "cpu" },
+    "llm": { "status": "ok", "url": "http://127.0.0.1:8085/completion" },
+    "tts": { "status": "ok", "device": "cuda", "voice_cached": true }
   }
 }
 ```
@@ -187,6 +215,7 @@ Returns JSON status (`200 OK` or `503 Service Unavailable`):
 ## Running Automated Tests
 
 Run the test suite covering text normalization, Spanish phonetics, sentence segmentation, and configuration overrides:
+
 ```powershell
 pip install -r requirements-dev.txt
 pytest
@@ -231,19 +260,24 @@ AssistantPrototype/
 ## Troubleshooting
 
 ### CUDA Out of Memory (OOM)
+
 XTTS-v2 consumes ~2.5–3.0 GB of VRAM. If llama-server with `-ngl` consumes too much memory:
+
 1. Lower `-ngl` in `start.ps1` from `8` to `4` or `0`.
 2. Check active GPU usage via `nvidia-smi`.
 3. Set `KELLY_TTS_DEVICE=cpu` in `.env` as a temporary CPU-only fallback.
 
 ### Microphone Permission Denied on Mobile
+
 Browsers restrict microphone capture over insecure HTTP on non-localhost origins.
+
 - Configure Tailscale HTTPS: `tailscale serve --https=443 8000`.
 - Access the app via `https://...` instead of `http://...`.
 
 ### Speech-to-Text Recognition Quality
 
 If transcriptions cut off early or miss speech:
+
 - Lower the minimum silence duration: `KELLY_STT_VAD_MIN_SILENCE_MS=300`
 - Enable audio debugging: `KELLY_DEBUG_SAVE_AUDIO=true` → inspect files in `debug/`
 
@@ -258,6 +292,7 @@ If transcriptions cut off early or miss speech:
 **Solution:** [`app/stt_prompt.py`](app/stt_prompt.py) builds a dynamic `initial_prompt` from the last 2 user messages in the conversation history, passed to Whisper's decoder on every transcription call.
 
 **Why this approach (not alternatives):**
+
 - **Not a static vocabulary list:** Would require manual maintenance every time topics change. Breaks when the user discusses anything not pre-listed.
 - **Not a larger model:** Valid long-term option but doubles latency and RAM. Not warranted until dynamic prompting is benchmarked. See "Pending Decision" below.
 - **Dynamic history prompt:** Whisper's `initial_prompt` biases beam search toward vocabulary the user has already used in the current conversation. Effect is strongest at utterance boundaries (where errors concentrated). Automatically adapts to any topic. Zero maintenance.
@@ -268,13 +303,13 @@ Only **user messages** are used — Kelly's responses are TTS-synthesized audio 
 
 All parameters are externalized via `.env` (prefix `KELLY_STT_`). No tuning requires code changes.
 
-| Parameter | Default | Rationale |
-|---|---|---|
-| `STT_BEAM_SIZE` | `5` | Whisper's original default. `1` = greedy (faster but less accurate). `5` = beam search with measurably better first-word accuracy on short conversational utterances. |
-| `STT_TEMPERATURE_FALLBACK` | `0.0,0.2,0.4,...,1.0` | Whisper's documented progressive fallback strategy. Starts deterministic (T=0), retries with increasing randomness only when the decoder's confidence score falls below threshold. Not a custom hack — this is the published algorithm. |
-| `STT_NO_SPEECH_THRESHOLD` | `0.6` | Whisper default. Controls silence detection sensitivity. Lower = more likely to discard real speech; higher = more likely to transcribe background noise. |
-| `STT_CONDITION_ON_PREVIOUS_TEXT` | `true` | Enables intra-utterance context from Whisper's internal decoded text. Consistent with `initial_prompt` usage. |
-| `STT_INITIAL_PROMPT_MAX_CHARS` | `224` | Chosen to stay within Whisper's ~224-token context window (Spanish averages ~4 chars/token, so 224 chars ≈ 56 tokens — well within budget). |
+| Parameter                        | Default               | Rationale                                                                                                                                                                                                                               |
+| -------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STT_BEAM_SIZE`                  | `5`                   | Whisper's original default. `1` = greedy (faster but less accurate). `5` = beam search with measurably better first-word accuracy on short conversational utterances.                                                                   |
+| `STT_TEMPERATURE_FALLBACK`       | `0.0,0.2,0.4,...,1.0` | Whisper's documented progressive fallback strategy. Starts deterministic (T=0), retries with increasing randomness only when the decoder's confidence score falls below threshold. Not a custom hack — this is the published algorithm. |
+| `STT_NO_SPEECH_THRESHOLD`        | `0.6`                 | Whisper default. Controls silence detection sensitivity. Lower = more likely to discard real speech; higher = more likely to transcribe background noise.                                                                               |
+| `STT_CONDITION_ON_PREVIOUS_TEXT` | `true`                | Enables intra-utterance context from Whisper's internal decoded text. Consistent with `initial_prompt` usage.                                                                                                                           |
+| `STT_INITIAL_PROMPT_MAX_CHARS`   | `224`                 | Chosen to stay within Whisper's ~224-token context window (Spanish averages ~4 chars/token, so 224 chars ≈ 56 tokens — well within budget).                                                                                             |
 
 ### Benchmark Tool
 
@@ -292,6 +327,7 @@ Run `benchmarks/stt_bench.py` against saved debug audio files to measure transcr
 ### Pending Decision: Model Upgrade
 
 If accuracy remains insufficient after these improvements, evaluate `faster-whisper medium`:
+
 - Latency impact: ~2x STT latency (1,200–1,900 ms → ~2,500–3,500 ms)
 - RAM impact: +~1 GB RAM
 - Accuracy: significantly better on Spanish conversational speech
@@ -300,51 +336,13 @@ If accuracy remains insufficient after these improvements, evaluate `faster-whis
 
 ---
 
-## Warmup and Latency
-
-### Startup Warmup (Cold-Start Elimination)
-
-At startup, Kelly sequentially pre-warms all three inference components before accepting requests. This eliminates the cold-start penalty where lazy-loaded models produce the first response 2–5× slower than subsequent ones.
-
-| Component | Warmup Mechanism | Why |
-|---|---|---|
-| **LLM** | POST 3-token trivial prompt to llama-server | Forces model weight load and KV cache allocation |
-| **STT** | Transcribe 0.5 s synthetic silence (16 kHz) | Triggers CTranslate2 lazy-load + int8 kernel compile |
-| **TTS** | Consume first `inference_stream()` chunk of "Hola." | Triggers XTTS GPT-2 autoregressive path + HiFiGAN CUDA kernels |
-
-All warmups are **non-blocking**: a failure produces a warning log and startup continues. The first user interaction may be slower if a warmup fails.
-
-Warmups run **sequentially** (LLM → STT → TTS). Parallel warmup would make cold-start timing unpredictable and harder to diagnose when something fails.
-
-### E2E Latency Breakdown
-
-Kelly instruments both backend and frontend with timestamps at every pipeline boundary. To capture a full breakdown:
-
-**Backend** — enable DEBUG logging (`KELLY_LOG_LEVEL=DEBUG`) and look for `[timing]` lines:
-```
-[timing] recv→stt: 1376ms | stt→llm_http: 12ms | llm_ttft: 768ms | llm→tts_enqueue: 0ms | tts_first_chunk: 566ms | total_BE: 2722ms | e2e_BE(sum): 2722ms
-```
-
-**Frontend** — open DevTools → Console and filter by `[FE timing]`:
-```
-[FE timing] send→transcript: 1400ms | send→first_byte: 2750ms | first_byte→play: 80ms | total send→play: 2830ms
-```
-
-**Interpreting the gap:** The `e2e_first_audio_ms` metric measures backend time only (recv→first-PCM-chunk-sent). The full user-perceived latency adds:
-- Network round-trip (WS): typically <10 ms on localhost, <50 ms over Tailscale LAN
-- Frontend: PCM decode + AudioContext scheduling (`first_byte→play`, typically 50–150 ms)
-
-> Fill in your measured values here after running with DEBUG logging enabled.
-
----
-
 ## Model Licenses & Attributions
 
-| Component | Model / Engine | License |
-|---|---|---|
-| **STT** | faster-whisper (OpenAI Whisper) | [MIT License](https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE) |
-| **LLM** | Qwen 2.5 7B Instruct | [Apache 2.0](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) |
-| **Inference** | llama.cpp | [MIT License](https://github.com/ggerganov/llama.cpp/blob/master/LICENSE) |
-| **TTS** | Coqui XTTS-v2 | [Coqui Public Model License (CPML)](https://coqui.ai/cpml) |
+| Component     | Model / Engine                  | License                                                                      |
+| ------------- | ------------------------------- | ---------------------------------------------------------------------------- |
+| **STT**       | faster-whisper (OpenAI Whisper) | [MIT License](https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE) |
+| **LLM**       | Qwen 2.5 7B Instruct            | [Apache 2.0](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)                |
+| **Inference** | llama.cpp                       | [MIT License](https://github.com/ggerganov/llama.cpp/blob/master/LICENSE)    |
+| **TTS**       | Coqui XTTS-v2                   | [Coqui Public Model License (CPML)](https://coqui.ai/cpml)                   |
 
 > **Note on Commercial Use:** Coqui XTTS-v2 is distributed under CPML (non-commercial personal/research use). For commercial deployments, consider replacing XTTS-v2 with an Apache/MIT-licensed TTS engine such as Piper.

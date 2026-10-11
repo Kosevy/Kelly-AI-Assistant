@@ -6,28 +6,24 @@ Runs faster-whisper transcriptions against saved debug .raw audio files and
 reports results in both human-readable form and JSON for before/after comparison.
 
 Usage:
-    # Run benchmark against all debug/*.raw files (no prompt, baseline):
+    # Run benchmark against debug/*.raw files:
     .venv\Scripts\python.exe benchmarks\stt_bench.py
 
-    # Save results to JSON:
-    .venv\Scripts\python.exe benchmarks\stt_bench.py --output benchmarks\stt_baseline.json
+    # Specify output file:
+    .venv\Scripts\python.exe benchmarks\stt_bench.py --output benchmarks\stt_after.json
 
-    # A/B test with a history-derived prompt (simulates conversation context):
-    .venv\Scripts\python.exe benchmarks\stt_bench.py --with-history "reglas del ajedrez" "Ken Carson"
-
-    # Pass a literal prompt string instead of history:
-    .venv\Scripts\python.exe benchmarks\stt_bench.py --with-prompt "reglas del ajedrez"
-
-    # Specify audio files explicitly:
+    # Use specific audio files:
     .venv\Scripts\python.exe benchmarks\stt_bench.py --audio debug\stt_1.raw debug\stt_2.raw
 
-Design rationale:
-    - --with-history: simulates the real production flow by passing utterances
-      through build_initial_prompt() — same function used in _transcribe_audio().
-      This verifies that the dynamic prompt improves accuracy in practice.
-    - --with-prompt: accepts a raw string for manual A/B testing.
-    - Both run after a no-prompt baseline so the comparison is always available.
-    - Loads only STT model (not TTS or LLM) to keep startup fast.
+    # Simulate conversation context (initial_prompt from prior turn):
+    .venv\Scripts\python.exe benchmarks\stt_bench.py --with-prompt "reglas del ajedrez"
+
+Design notes:
+    - Loads settings from .env so benchmark uses identical config as production.
+    - Does NOT instantiate TTS or LLM — only STT model.
+    - Runs each file twice: once without initial_prompt, once with (if --with-prompt set).
+      Enables direct A/B measurement of the dynamic prompt effect.
+    - Reports latency in ms and flags results that differ between conditions.
 """
 from __future__ import annotations
 
@@ -45,6 +41,8 @@ sys.path.insert(0, str(ROOT))
 import os
 os.environ.setdefault("COQUI_TOS_AGREED", "1")
 
+# Must import torch before TTS (patch chain) — but we don't need TTS here.
+# Import only what's needed for STT.
 from app.config import settings
 from app.stt_prompt import build_initial_prompt
 from faster_whisper import WhisperModel
@@ -91,8 +89,7 @@ def transcribe_once(
 
 def run_benchmark(
     audio_paths: list[Path],
-    prompt_text: str | None,
-    prompt_source: str,
+    with_prompt: str | None,
     output_path: Path | None,
 ) -> None:
     model = load_model()
@@ -101,9 +98,6 @@ def run_benchmark(
     print()
     print("=" * 72)
     print(f"  Kelly STT Benchmark — model={settings.stt_model} beam={settings.stt_beam_size}")
-    if prompt_text:
-        preview = prompt_text[:60] + "..." if len(prompt_text) > 60 else prompt_text
-        print(f"  A/B prompt ({prompt_source}): \"{preview}\"")
     print("=" * 72)
 
     for path in audio_paths:
@@ -113,28 +107,29 @@ def run_benchmark(
 
         # Baseline: no initial_prompt
         text_base, lat_base = transcribe_once(model, audio_bytes, initial_prompt=None)
-        print(f"  [no prompt]   {lat_base:6.0f} ms  →  \"{text_base}\"")
+        print(f"  [no prompt]  {lat_base:.0f} ms  →  \"{text_base}\"")
 
         # With prompt (if provided)
         text_prompt = text_lat_prompt = None
-        if prompt_text:
+        if with_prompt:
             text_prompt, text_lat_prompt = transcribe_once(
-                model, audio_bytes, initial_prompt=prompt_text
+                model, audio_bytes, initial_prompt=with_prompt
             )
-            diff_marker = "*** DIFFERENT ***" if text_prompt != text_base else "(same result)"
-            print(f"  [with prompt] {text_lat_prompt:6.0f} ms  →  \"{text_prompt}\"  {diff_marker}")
+            print(f"  [with prompt] {text_lat_prompt:.0f} ms  →  \"{text_prompt}\"")
+            if text_prompt != text_base:
+                print(f"  *** DIFFERENT ***")
+            else:
+                print(f"  (same result)")
 
         results.append({
             "file": path.name,
             "size_bytes": len(audio_bytes),
             "no_prompt": {"text": text_base, "latency_ms": round(lat_base, 1)},
             "with_prompt": {
-                "prompt_source": prompt_source,
-                "prompt_used": prompt_text,
+                "prompt_used": with_prompt,
                 "text": text_prompt,
                 "latency_ms": round(text_lat_prompt, 1) if text_lat_prompt else None,
-                "changed": text_prompt != text_base if text_prompt is not None else None,
-            } if prompt_text else None,
+            } if with_prompt else None,
         })
 
     print()
@@ -155,6 +150,7 @@ def run_benchmark(
         output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         print(f"  Results written to: {output_path}")
 
+    # Also print JSON to stdout for easy capture
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
@@ -174,40 +170,27 @@ def main() -> None:
         default=None,
         help="Write JSON results to this file (e.g. benchmarks/stt_after.json)",
     )
-
-    prompt_group = parser.add_mutually_exclusive_group()
-    prompt_group.add_argument(
-        "--with-history",
-        nargs="+",
-        metavar="UTTERANCE",
-        help=(
-            "Simulate conversation history by passing utterances through "
-            "build_initial_prompt() — same function used in production. "
-            "E.g. --with-history 'reglas del ajedrez' 'Ken Carson'"
-        ),
-    )
-    prompt_group.add_argument(
+    parser.add_argument(
         "--with-prompt",
         metavar="TEXT",
         default=None,
-        help="Run a second pass with this literal text as initial_prompt",
+        help="Run a second pass with this text as initial_prompt to measure its effect",
     )
     args = parser.parse_args()
 
-    # Resolve audio files
     if args.audio:
         audio_paths = [Path(p) for p in args.audio]
     else:
         debug_dir = ROOT / "debug"
         if not debug_dir.exists():
-            print("[bench] No audio files specified and debug/ dir not found.")
-            print("        Run Kelly with KELLY_DEBUG_SAVE_AUDIO=true to capture audio,")
-            print("        or pass --audio path/to/file.raw")
+            print(f"[bench] No audio files specified and debug/ dir not found.")
+            print(f"        Run Kelly with KELLY_DEBUG_SAVE_AUDIO=true to capture audio,")
+            print(f"        or pass --audio path/to/file.raw")
             sys.exit(1)
         audio_paths = sorted(debug_dir.glob("stt_*.raw"))
         if not audio_paths:
             print(f"[bench] No .raw files found in {debug_dir}.")
-            print("        Enable KELLY_DEBUG_SAVE_AUDIO=true and speak to Kelly first.")
+            print(f"        Enable KELLY_DEBUG_SAVE_AUDIO=true and speak to Kelly first.")
             sys.exit(1)
 
     missing = [p for p in audio_paths if not p.exists()]
@@ -215,26 +198,10 @@ def main() -> None:
         print(f"[bench] Files not found: {missing}")
         sys.exit(1)
 
-    # Resolve prompt
-    prompt_text: str | None = None
-    prompt_source = "none"
-
-    if args.with_history:
-        # Build history from utterances, same as production code
-        history = [{"role": "user", "content": u} for u in args.with_history]
-        prompt_text = build_initial_prompt(
-            history,
-            max_chars=settings.stt_initial_prompt_max_chars,
-        )
-        prompt_source = f"build_initial_prompt({len(args.with_history)} utterances)"
-        print(f"[bench] Built initial_prompt from history: \"{prompt_text}\"")
-    elif args.with_prompt:
-        prompt_text = args.with_prompt
-        prompt_source = "literal --with-prompt"
-
     output_path = Path(args.output) if args.output else None
-    run_benchmark(audio_paths, prompt_text, prompt_source, output_path)
+    run_benchmark(audio_paths, args.with_prompt, output_path)
 
 
 if __name__ == "__main__":
     main()
+

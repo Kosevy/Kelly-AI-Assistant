@@ -6,213 +6,456 @@
     <title>Kelly — Asistente Local</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#1e88e5">
+
+    <!-- Markdown, Syntax Highlighting & Sanitization via CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: system-ui, -apple-system, sans-serif;
-            background: #0f172a;
-            color: #f8fafc;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #090d16;
+            color: #f1f5f9;
             display: flex;
-            flex-direction: column;
+            justify-content: center;
             align-items: center;
             min-height: 100dvh;
-            padding: 1.5rem 1rem;
-            gap: 1.25rem;
+            padding: 0.75rem;
         }
 
-        h1 {
-            font-size: 1.4rem;
-            font-weight: 600;
-            color: #94a3b8;
-            letter-spacing: 0.05em;
-            margin-top: 0.5rem;
-        }
-
-        /* Botón push-to-talk */
-        #recordBtn {
-            width: 8.5rem;
-            height: 8.5rem;
-            border-radius: 50%;
-            border: 3px solid #3b82f6;
-            background: #1e3a5f;
-            color: white;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            user-select: none;
-            -webkit-user-select: none;
-            touch-action: none;
-            transition: background 0.15s, border-color 0.15s, transform 0.1s;
-            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        #chat-container {
+            width: min(100%, 54rem);
+            height: 96dvh;
             display: flex;
             flex-direction: column;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.55);
+        }
+
+        /* ── Header ──────────────────────────────────────────────────────── */
+        header {
+            display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 0.4rem;
+            justify-content: space-between;
+            padding: 0.8rem 1.25rem;
+            background: #0b1120;
+            border-bottom: 1px solid #1e293b;
             flex-shrink: 0;
+            gap: 0.75rem;
         }
 
-        #recordBtn:active,
-        #recordBtn.recording {
-            background: #7f1d1d;
-            border-color: #ef4444;
-            transform: scale(0.96);
-            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+        .brand-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
-        #recordBtn.playing {
-            border-color: #22c55e;
-            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.3);
+        .brand-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #38bdf8;
+            letter-spacing: 0.04em;
         }
 
-        .mic-icon { font-size: 2rem; line-height: 1; }
-
-        /* Status */
         #status {
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             color: #64748b;
-            min-height: 1.4em;
+            display: flex;
+            align-items: center;
             transition: color 0.2s;
-            text-align: center;
         }
         #status.active { color: #94a3b8; }
         #status.error  { color: #f87171; }
 
         #conn-dot {
-            width: 0.45rem;
-            height: 0.45rem;
+            width: 0.5rem;
+            height: 0.5rem;
             border-radius: 50%;
             background: #64748b;
             display: inline-block;
-            margin-right: 0.35rem;
+            margin-right: 0.4rem;
             transition: background 0.3s;
-        }
-        #conn-dot.connected    { background: #22c55e; }
-        #conn-dot.disconnected { background: #ef4444; }
-
-        /* ── Panel de historial ─────────────────────────────────────────── */
-        #history-panel {
-            width: min(95vw, 32rem);
-            background: #1e293b;
-            border-radius: 0.75rem;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            max-height: 55vh;
-            border: 1px solid #334155;
-        }
-
-        .history-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.6rem 0.9rem;
-            background: #0f172a;
-            border-bottom: 1px solid #334155;
             flex-shrink: 0;
         }
+        #conn-dot.connected    { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+        #conn-dot.disconnected { background: #ef4444; }
 
-        .history-header span {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: #64748b;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
-        #clearBtn {
-            background: none;
+        .btn-header {
+            background: #1e293b;
             border: 1px solid #334155;
-            color: #64748b;
-            font-size: 0.7rem;
-            padding: 0.25rem 0.6rem;
-            border-radius: 0.35rem;
+            color: #94a3b8;
+            font-size: 0.76rem;
+            padding: 0.35rem 0.65rem;
+            border-radius: 0.4rem;
             cursor: pointer;
-            transition: color 0.2s, border-color 0.2s;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-weight: 500;
         }
-        #clearBtn:hover { color: #f87171; border-color: #f87171; }
+        .btn-header:hover { color: #f1f5f9; border-color: #475569; background: #273549; }
+        .btn-header.active-voice {
+            background: #064e3b;
+            border-color: #059669;
+            color: #a7f3d0;
+        }
+        .btn-header.active-voice:hover {
+            background: #047857;
+            color: #ffffff;
+        }
+        #clearBtn:hover { color: #f87171; border-color: #ef4444; }
 
+        /* ── Historial de Mensajes ────────────────────────────────────────── */
         #history-messages {
+            flex: 1;
             overflow-y: auto;
-            padding: 0.75rem 0.9rem;
+            padding: 1.25rem;
             display: flex;
             flex-direction: column;
-            gap: 0.5rem;
-            min-height: 3rem;
-        }
-
-        .msg {
-            font-size: 0.83rem;
-            line-height: 1.45;
-            max-width: 100%;
-            word-break: break-word;
-        }
-
-        .msg-user {
-            color: #60a5fa;
-        }
-        .msg-user::before { content: "Tú  "; font-weight: 700; }
-
-        .msg-assistant {
-            color: #86efac;
-        }
-        .msg-assistant::before { content: "Kelly  "; font-weight: 700; }
-
-        .msg-system {
-            color: #475569;
-            font-style: italic;
-            font-size: 0.75rem;
+            gap: 1rem;
+            scroll-behavior: smooth;
         }
 
         .empty-hint {
-            color: #334155;
-            font-size: 0.8rem;
+            color: #475569;
+            font-size: 0.9rem;
             font-style: italic;
             text-align: center;
-            padding: 1rem 0;
+            margin: auto;
+            max-width: 22rem;
+            line-height: 1.5;
+        }
+
+        .msg {
+            display: flex;
+            flex-direction: column;
+            max-width: 86%;
+            border-radius: 0.85rem;
+            padding: 0.85rem 1.1rem;
+            font-size: 0.92rem;
+            line-height: 1.55;
+            position: relative;
+            word-break: break-word;
+        }
+
+        .msg-author {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 0.35rem;
+            opacity: 0.8;
+        }
+
+        .msg-user {
+            align-self: flex-end;
+            background: #1e3a8a;
+            color: #f8fafc;
+            border-bottom-right-radius: 0.25rem;
+            box-shadow: 0 4px 12px rgba(30, 58, 138, 0.25);
+        }
+        .msg-user .msg-author { color: #93c5fd; }
+
+        .msg-assistant {
+            align-self: flex-start;
+            background: #182234;
+            color: #f1f5f9;
+            border-bottom-left-radius: 0.25rem;
+            border: 1px solid #283548;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+        .msg-assistant .msg-author { color: #38bdf8; }
+
+        .msg-system {
+            align-self: center;
+            background: rgba(30, 41, 59, 0.6);
+            color: #94a3b8;
+            font-size: 0.78rem;
+            font-style: italic;
+            border-radius: 1rem;
+            padding: 0.3rem 0.9rem;
+            border: 1px solid #334155;
+        }
+
+        /* ── Markdown & Code Styling en respuestas ───────────────────────── */
+        .msg-content h1, .msg-content h2, .msg-content h3, .msg-content h4 {
+            color: #f8fafc;
+            margin-top: 0.8rem;
+            margin-bottom: 0.4rem;
+            font-weight: 600;
+        }
+        .msg-content h1 { font-size: 1.25rem; border-bottom: 1px solid #334155; padding-bottom: 0.3rem; }
+        .msg-content h2 { font-size: 1.1rem; border-bottom: 1px solid #1e293b; padding-bottom: 0.25rem; }
+        .msg-content h3 { font-size: 0.98rem; }
+        .msg-content p { margin-bottom: 0.6rem; }
+        .msg-content p:last-child { margin-bottom: 0; }
+        .msg-content ul, .msg-content ol {
+            margin-left: 1.3rem;
+            margin-bottom: 0.6rem;
+        }
+        .msg-content li { margin-bottom: 0.25rem; }
+
+        .msg-content code:not(pre code) {
+            background: #0b1120;
+            color: #38bdf8;
+            padding: 0.15rem 0.35rem;
+            border-radius: 0.3rem;
+            font-size: 0.85em;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            border: 1px solid #1e293b;
+        }
+
+        .msg-content pre {
+            position: relative;
+            background: #060913;
+            border: 1px solid #1e293b;
+            border-radius: 0.5rem;
+            margin: 0.75rem 0;
+            padding: 0.9rem;
+            overflow-x: auto;
+        }
+        .msg-content pre code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.85rem;
+            line-height: 1.45;
+        }
+
+        .copy-code-btn {
+            position: absolute;
+            top: 0.45rem;
+            right: 0.45rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #94a3b8;
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 0.3rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .copy-code-btn:hover { color: #f1f5f9; background: #334155; }
+
+        .msg-content blockquote {
+            border-left: 3px solid #38bdf8;
+            padding-left: 0.75rem;
+            color: #94a3b8;
+            margin: 0.6rem 0;
+            font-style: italic;
+        }
+
+        .msg-content table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 0.75rem 0;
+            font-size: 0.85rem;
+        }
+        .msg-content th, .msg-content td {
+            border: 1px solid #334155;
+            padding: 0.45rem 0.7rem;
+            text-align: left;
+        }
+        .msg-content th {
+            background: #1e293b;
+            color: #f8fafc;
+            font-weight: 600;
+        }
+
+        /* Indicador animado de pensando */
+        .thinking-dots {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.2rem;
+            color: #94a3b8;
+            font-style: italic;
+        }
+        .thinking-dots span {
+            animation: blink 1.4s infinite both;
+        }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink {
+            0%, 80%, 100% { opacity: 0; }
+            40% { opacity: 1; }
+        }
+
+        /* ── Barra de Entrada ────────────────────────────────────────────── */
+        footer {
+            padding: 0.75rem 1rem;
+            background: #0b1120;
+            border-top: 1px solid #1e293b;
+            display: flex;
+            align-items: flex-end;
+            gap: 0.6rem;
+            flex-shrink: 0;
+        }
+
+        /* Botón de micrófono push-to-talk */
+        #recordBtn {
+            width: 3rem;
+            height: 3rem;
+            border-radius: 50%;
+            border: 2px solid #3b82f6;
+            background: #1e3a5f;
+            color: white;
+            font-size: 1.25rem;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            box-shadow: 0 2px 10px rgba(59, 130, 246, 0.25);
+        }
+        #recordBtn:active, #recordBtn.recording {
+            background: #7f1d1d;
+            border-color: #ef4444;
+            transform: scale(0.94);
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
+        }
+        #recordBtn.playing {
+            border-color: #22c55e;
+            box-shadow: 0 0 14px rgba(34, 197, 94, 0.4);
+        }
+
+        /* Campo de texto multi-línea */
+        #textInput {
+            flex: 1;
+            min-height: 3rem;
+            max-height: 9rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            color: #f8fafc;
+            padding: 0.75rem 0.95rem;
+            resize: none;
+            font-family: inherit;
+            font-size: 0.92rem;
+            line-height: 1.45;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        #textInput:focus {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+        #textInput::placeholder { color: #475569; }
+
+        /* Botón enviar */
+        #sendBtn {
+            width: 3rem;
+            height: 3rem;
+            border-radius: 0.75rem;
+            border: none;
+            background: #2563eb;
+            color: white;
+            font-size: 1.15rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+            box-shadow: 0 2px 10px rgba(37, 99, 235, 0.3);
+        }
+        #sendBtn:hover { background: #1d4ed8; transform: translateY(-1px); }
+        #sendBtn:active { transform: scale(0.96); }
+
+        @media (max-width: 640px) {
+            #chat-container { height: 100dvh; border-radius: 0; border: none; }
+            body { padding: 0; }
+            .msg { max-width: 92%; }
         }
     </style>
 </head>
 <body>
-    <h1>✦ Kelly</h1>
 
-    <button id="recordBtn" aria-label="Mantén presionado para hablar">
-        <span class="mic-icon">🎙️</span>
-        <span id="btnLabel">Hablar</span>
-    </button>
-
-    <p id="status">
-        <span id="conn-dot"></span>
-        <span id="statusText">Conectando...</span>
-    </p>
-
-    <!-- Panel de historial (B4) -->
-    <div id="history-panel" role="log" aria-live="polite" aria-label="Historial de conversación">
-        <div class="history-header">
-            <span>Conversación</span>
-            <button id="clearBtn" title="Borrar historial">Borrar</button>
+<div id="chat-container">
+    <!-- Header -->
+    <header>
+        <div class="brand-group">
+            <span class="brand-title">✦ Kelly</span>
+            <div id="status">
+                <span id="conn-dot"></span>
+                <span id="statusText">Conectando...</span>
+            </div>
         </div>
-        <div id="history-messages">
-            <p class="empty-hint">Mantén presionado el botón y habla con Kelly</p>
+        <div class="header-actions">
+            <!-- Toggle de Voz -->
+            <button id="voiceToggleBtn" class="btn-header active-voice" title="Activar/desactivar lectura por voz (TTS)">
+                <span id="voiceIcon">🔊</span>
+                <span id="voiceLabel">Voz ON</span>
+            </button>
+            <button id="clearBtn" class="btn-header" title="Borrar historial">Borrar</button>
         </div>
+    </header>
+
+    <!-- Área de conversación -->
+    <div id="history-messages" role="log" aria-live="polite" aria-label="Historial de conversación">
+        <p class="empty-hint">Escribe un mensaje o mantén presionado el micrófono para interactuar con Kelly.</p>
     </div>
+
+    <!-- Barra de entrada híbrida -->
+    <footer>
+        <button id="recordBtn" aria-label="Mantén presionado para hablar" title="Mantén presionado para hablar">
+            <span class="mic-icon">🎙️</span>
+        </button>
+
+        <textarea
+            id="textInput"
+            placeholder="Escribe un mensaje... (Enter para enviar, Shift+Enter para salto de línea)"
+            rows="1"
+            aria-label="Escribe tu mensaje"
+        ></textarea>
+
+        <button id="sendBtn" aria-label="Enviar mensaje" title="Enviar">
+            ➤
+        </button>
+    </footer>
+</div>
 
 <script>
 // ─── Referencias DOM ──────────────────────────────────────────────────────────
-const btn          = document.getElementById('recordBtn');
-const btnLabel     = document.getElementById('btnLabel');
-const statusText   = document.getElementById('statusText');
-const statusEl     = document.getElementById('status');
-const connDot      = document.getElementById('conn-dot');
-const historyMsgs  = document.getElementById('history-messages');
-const clearBtn     = document.getElementById('clearBtn');
+const recordBtn       = document.getElementById('recordBtn');
+const textInput       = document.getElementById('textInput');
+const sendBtn         = document.getElementById('sendBtn');
+const voiceToggleBtn  = document.getElementById('voiceToggleBtn');
+const voiceIcon       = document.getElementById('voiceIcon');
+const voiceLabel      = document.getElementById('voiceLabel');
+const statusText      = document.getElementById('statusText');
+const statusEl        = document.getElementById('status');
+const connDot         = document.getElementById('conn-dot');
+const historyMsgs     = document.getElementById('history-messages');
+const clearBtn        = document.getElementById('clearBtn');
 
-// ─── Estado ───────────────────────────────────────────────────────────────────
-let mediaRecorder  = null;
-let audioChunks    = [];
-let isPlaying      = false;
-let ws             = null;
+// ─── Estado del Frontend ───────────────────────────────────────────────────────
+let voiceEnabled       = true;     // Toggle de voz (default: ON)
+let mediaRecorder      = null;
+let audioChunks        = [];
+let isPlaying          = false;
+let ws                 = null;
+
+// Streaming y renderizado
+let currentAssistantElement = null;
+let currentAssistantContent = null;
+let currentAssistantText    = "";
 
 // ─── PCM streaming state ──────────────────────────────────────────────────────
 let audioCtx      = null;    // AudioContext (lazy init — satisfies autoplay policy)
@@ -223,24 +466,57 @@ let audioFormat   = { sampleRate: 24000, channels: 1, dtype: 'int16' };
 let nextSentenceId   = 0;           // Next sentence_id we expect to play
 let pendingSentences = {};           // sentence_id -> { chunks: ArrayBuffer[], done: bool }
 
-// ─── E2E timing state (diagnosing the gap between components and e2e) ─────────
-// These mirror the backend [timing] log, covering the frontend half of the round-trip.
-// Read: Open DevTools → Console, filter by "[FE timing]" to see the breakdown.
-//
-//   t_send      : audio blob sent over WebSocket (end of PTT recording)
-//   t_transcript: transcript JSON received (STT done on server)
-//   t_first_byte: first PCM binary chunk received from WS
-//   t_play_start: AudioContext.currentTime when first buffer starts playing
-//
-// The gap between t_send and t_first_byte is roughly equal to the backend's
-// e2e_BE(sum) from the [timing] log. Any remaining gap vs e2e_first_audio_ms
-// lives in the frontend: t_first_byte → t_play_start (decode + schedule delay).
-let t_send       = null;   // performance.now() when audio was sent
-let t_transcript = null;   // performance.now() when transcript arrived
-let t_first_byte = null;   // performance.now() when first PCM chunk arrived
-let t_play_start = null;   // performance.now() when first buffer starts
-let _fe_timing_logged = false;  // only log once per interaction
+// Timing diagnóstico
+let t_send       = null;
+let t_transcript = null;
+let t_first_byte = null;
+let t_play_start = null;
+let _fe_timing_logged = false;
 
+// ─── Historial de conversación ────────────────────────────────────────────────
+let conversationHistory = [];  // [{role: "user"|"assistant", content: "..."}]
+const MAX_TURNS = 12;          // 12 turnos = 24 mensajes
+
+// ─── Markdown Rendering Helper ───────────────────────────────────────────────
+function renderMarkdown(rawText) {
+    if (window.marked && window.DOMPurify) {
+        try {
+            const dirty = marked.parse(rawText, { gfm: true, breaks: true });
+            return DOMPurify.sanitize(dirty);
+        } catch (e) {
+            console.error('[render] Error parseando Markdown:', e);
+        }
+    }
+    const d = document.createElement('div');
+    d.textContent = rawText;
+    return d.innerHTML.replace(/\n/g, '<br>');
+}
+
+function postProcessCodeBlocks(container) {
+    if (window.hljs) {
+        container.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+        });
+    }
+    // Añadir botón de copiar código a cada bloque pre
+    container.querySelectorAll('pre').forEach((pre) => {
+        if (pre.querySelector('.copy-code-btn')) return;
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-code-btn';
+        copyBtn.type = 'button';
+        copyBtn.textContent = 'Copiar';
+        copyBtn.onclick = () => {
+            const code = pre.querySelector('code')?.innerText || pre.innerText;
+            navigator.clipboard.writeText(code).then(() => {
+                copyBtn.textContent = '¡Copiado!';
+                setTimeout(() => { copyBtn.textContent = 'Copiar'; }, 2000);
+            });
+        };
+        pre.appendChild(copyBtn);
+    });
+}
+
+// ─── AudioContext FIFO Scheduler ──────────────────────────────────────────────
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({
@@ -254,18 +530,13 @@ function getAudioContext() {
     return audioCtx;
 }
 
-/**
- * Called for every binary WebSocket message.
- * Routes the chunk to the currently-open sentence buffer.
- * Backward-compatible: RIFF-header WAV is decoded and scheduled directly.
- */
 function handleBinaryChunk(arrayBuffer) {
-    // First binary chunk of this interaction — record arrival time for FE timing
+    if (!voiceEnabled) return; // Ignorar audio si voz está desactivada
+
     if (t_first_byte === null) {
         t_first_byte = performance.now();
     }
 
-    // Backward-compat: WAV starts with 0x52494646 "RIFF"
     const view = new DataView(arrayBuffer);
     if (view.byteLength >= 4 && view.getUint32(0, false) === 0x52494646) {
         getAudioContext().decodeAudioData(
@@ -276,8 +547,6 @@ function handleBinaryChunk(arrayBuffer) {
         return;
     }
 
-    // PCM int16 path — find the sentence buffer that is open (not yet done)
-    // The last opened (audio_chunk_start received, audio_chunk_end not yet) is the active one
     const activeSid = findActiveSentenceId();
     if (activeSid !== null) {
         pendingSentences[activeSid].chunks.push(arrayBuffer);
@@ -286,7 +555,6 @@ function handleBinaryChunk(arrayBuffer) {
     }
 }
 
-/** Returns the highest sentence_id that has been started but not yet ended, or null. */
 function findActiveSentenceId() {
     let active = null;
     for (const sid of Object.keys(pendingSentences)) {
@@ -299,10 +567,8 @@ function findActiveSentenceId() {
     return active;
 }
 
-/**
- * Called on audio_chunk_end: mark sentence as complete and try playing.
- */
 function onSentenceEnd(sid) {
+    if (!voiceEnabled) return;
     if (!pendingSentences[sid]) {
         console.warn(`[audio] audio_chunk_end for unknown sentence #${sid}`);
         return;
@@ -311,28 +577,21 @@ function onSentenceEnd(sid) {
     tryPlayNextSentence();
 }
 
-/**
- * Plays sentences in strict order: nextSentenceId, nextSentenceId+1, ...
- * Only advances when the current sentence is both complete and played.
- */
 function tryPlayNextSentence() {
+    if (!voiceEnabled) return;
+
     const entry = pendingSentences[nextSentenceId];
-    if (!entry || !entry.done) {
-        // Not ready yet — will be called again when audio_chunk_end arrives
-        return;
-    }
+    if (!entry || !entry.done) return;
 
     const chunks = entry.chunks;
     delete pendingSentences[nextSentenceId];
     nextSentenceId++;
 
     if (chunks.length === 0) {
-        // Empty sentence (cancelled before any chunks arrived) — skip
         tryPlayNextSentence();
         return;
     }
 
-    // Concatenate all ArrayBuffers for this sentence
     const totalBytes = chunks.reduce((acc, b) => acc + b.byteLength, 0);
     const combined   = new Uint8Array(totalBytes);
     let offset = 0;
@@ -341,7 +600,6 @@ function tryPlayNextSentence() {
         offset += chunk.byteLength;
     }
 
-    // int16 -> float32
     const int16View   = new Int16Array(combined.buffer);
     const numSamples  = int16View.length;
     const ctx         = getAudioContext();
@@ -351,17 +609,14 @@ function tryPlayNextSentence() {
         float32[i] = int16View[i] / 32767;
     }
 
-    // Schedule with onended callback to chain the next sentence
     scheduleAudioBuffer(audioBuffer, () => {
         tryPlayNextSentence();
     });
 }
 
-/**
- * Schedule an AudioBuffer for gapless sequential playback.
- * Optional onEnded callback fires when this buffer finishes playing.
- */
 function scheduleAudioBuffer(audioBuffer, onEnded = null) {
+    if (!voiceEnabled) return;
+
     const ctx = getAudioContext();
     const now = ctx.currentTime;
 
@@ -374,99 +629,45 @@ function scheduleAudioBuffer(audioBuffer, onEnded = null) {
     source.connect(ctx.destination);
     source.start(nextPlayTime);
 
-    // Log FE timing breakdown once per interaction (at first buffer play)
     if (!_fe_timing_logged && t_send !== null) {
         _fe_timing_logged = true;
         t_play_start = performance.now();
-        const total      = t_play_start - t_send;
         const toTranscript = t_transcript !== null ? (t_transcript - t_send).toFixed(0) : '?';
         const toByte       = t_first_byte  !== null ? (t_first_byte  - t_send).toFixed(0) : '?';
         const toPlay       = (t_play_start - t_send).toFixed(0);
-        const byteToPlay   = t_first_byte  !== null ? (t_play_start - t_first_byte).toFixed(0) : '?';
-        console.log(
-            `[FE timing] send→transcript: ${toTranscript}ms` +
-            ` | send→first_byte: ${toByte}ms` +
-            ` | first_byte→play: ${byteToPlay}ms` +
-            ` | total send→play: ${toPlay}ms`
-        );
+        console.log(`[FE timing] send→transcript: ${toTranscript}ms | send→first_byte: ${toByte}ms | total send→play: ${toPlay}ms`);
     }
 
     nextPlayTime += audioBuffer.duration;
-
-    btn.classList.add('playing');
+    recordBtn.classList.add('playing');
     setStatus('Reproduciendo...');
     isPlaying = true;
 
     source.onended = () => {
         if (onEnded) onEnded();
-        // If nothing more is scheduled, mark idle
         const currentNow = ctx.currentTime;
         if (nextPlayTime <= currentNow + 0.15) {
             isPlaying = false;
-            btn.classList.remove('playing');
-            setStatus('Listo para escuchar');
+            recordBtn.classList.remove('playing');
+            setStatus('Listo para interactuar');
             nextPlayTime = 0;
         }
     };
 }
 
-// ─── B3: Historial de conversación ────────────────────────────────────────────
-let conversationHistory = [];  // [{role: "user"|"assistant", content: "..."}]
-const MAX_TURNS = 6;           // Máximo de turnos a mantener (= 12 mensajes)
-let pendingUserText = null;    // Texto transcrito, esperando respuesta del LLM
-
-// ─── Helpers de estado ────────────────────────────────────────────────────────
-function setStatus(text, cls = 'active') {
-    statusText.textContent = text;
-    statusEl.className = cls;
-}
-
-// ─── B4: Historial UI ─────────────────────────────────────────────────────────
-function addHistoryEntry(text, role = 'system') {
-    // Eliminar hint vacío si existe
-    const hint = historyMsgs.querySelector('.empty-hint');
-    if (hint) hint.remove();
-
-    const div = document.createElement('div');
-    div.className = `msg msg-${role}`;
-    div.textContent = text;
-    historyMsgs.appendChild(div);
-    historyMsgs.scrollTop = historyMsgs.scrollHeight;
-}
-
-function clearHistory() {
-    conversationHistory = [];
-    pendingUserText = null;
-    historyMsgs.innerHTML = '<p class="empty-hint">Historial borrado. Habla con Kelly para comenzar.</p>';
-    console.log('[history] Historial borrado');
-}
-
-clearBtn.addEventListener('click', clearHistory);
-
-function trimHistory() {
-    // Mantener máximo MAX_TURNS turnos (2 mensajes por turno)
-    const maxMsgs = MAX_TURNS * 2;
-    if (conversationHistory.length > maxMsgs) {
-        conversationHistory.splice(0, conversationHistory.length - maxMsgs);
-    }
-}
-
 // ─── Barge-in: detener audio y notificar backend ──────────────────────────────
 function cancelPlayback() {
-    // Kill AudioContext — stops all scheduled sources immediately
     if (audioCtx && audioCtx.state !== 'closed') {
         audioCtx.close().catch(() => {});
         audioCtx = null;
         nextPlayTime = 0;
     }
 
-    // Reset ordered-playback state
     pendingSentences = {};
     nextSentenceId   = 0;
     isPlaying        = false;
-    btn.classList.remove('playing');
+    recordBtn.classList.remove('playing');
 
-    // Reset FE timing so a barge-in doesn't bleed stale timestamps into the next interaction
     t_send = null; t_transcript = null; t_first_byte = null;
     t_play_start = null; _fe_timing_logged = false;
 
@@ -475,7 +676,165 @@ function cancelPlayback() {
     }
 }
 
-// ─── WebSocket ────────────────────────────────────────────────────────────────
+// ─── Helpers de UI y Estado ───────────────────────────────────────────────────
+function setStatus(text, cls = 'active') {
+    statusText.textContent = text;
+    statusEl.className = cls;
+}
+
+function removeEmptyHint() {
+    const hint = historyMsgs.querySelector('.empty-hint');
+    if (hint) hint.remove();
+}
+
+function addHistoryEntry(text, role = 'system') {
+    removeEmptyHint();
+
+    const div = document.createElement('div');
+    div.className = `msg msg-${role}`;
+
+    if (role === 'user') {
+        div.innerHTML = `<span class="msg-author">Tú</span><div class="msg-content">${renderMarkdown(text)}</div>`;
+    } else if (role === 'assistant') {
+        div.innerHTML = `<span class="msg-author">Kelly</span><div class="msg-content">${renderMarkdown(text)}</div>`;
+        postProcessCodeBlocks(div);
+    } else {
+        div.textContent = text;
+    }
+
+    historyMsgs.appendChild(div);
+    historyMsgs.scrollTop = historyMsgs.scrollHeight;
+    return div;
+}
+
+function createAssistantStreamingPlaceholder() {
+    removeEmptyHint();
+
+    if (currentAssistantElement) {
+        finalizeAssistantMessage(currentAssistantText);
+    }
+
+    currentAssistantElement = document.createElement('div');
+    currentAssistantElement.className = 'msg msg-assistant streaming';
+    currentAssistantElement.innerHTML = `
+        <span class="msg-author">Kelly</span>
+        <div class="msg-content"><span class="thinking-dots">Pensando<span>.</span><span>.</span><span>.</span></span></div>
+    `;
+    historyMsgs.appendChild(currentAssistantElement);
+    historyMsgs.scrollTop = historyMsgs.scrollHeight;
+
+    currentAssistantContent = currentAssistantElement.querySelector('.msg-content');
+    currentAssistantText = "";
+}
+
+function updateAssistantStreamingText(token) {
+    if (!currentAssistantContent) {
+        createAssistantStreamingPlaceholder();
+    }
+    currentAssistantText += token;
+    currentAssistantContent.innerHTML = renderMarkdown(currentAssistantText);
+    historyMsgs.scrollTop = historyMsgs.scrollHeight;
+}
+
+function finalizeAssistantMessage(fullText) {
+    const textToFinalize = fullText || currentAssistantText;
+    if (currentAssistantElement && currentAssistantContent) {
+        currentAssistantElement.classList.remove('streaming');
+        currentAssistantContent.innerHTML = renderMarkdown(textToFinalize);
+        postProcessCodeBlocks(currentAssistantElement);
+    } else if (textToFinalize) {
+        addHistoryEntry(textToFinalize, 'assistant');
+    }
+
+    currentAssistantElement = null;
+    currentAssistantContent = null;
+    currentAssistantText = "";
+    historyMsgs.scrollTop = historyMsgs.scrollHeight;
+}
+
+function clearHistory() {
+    cancelPlayback();
+    conversationHistory = [];
+    currentAssistantElement = null;
+    currentAssistantContent = null;
+    currentAssistantText = "";
+    historyMsgs.innerHTML = '<p class="empty-hint">Historial borrado. Escribe o habla para comenzar.</p>';
+    console.log('[history] Historial borrado');
+}
+
+clearBtn.addEventListener('click', clearHistory);
+
+function trimHistory() {
+    const maxMsgs = MAX_TURNS * 2;
+    if (conversationHistory.length > maxMsgs) {
+        conversationHistory.splice(0, conversationHistory.length - maxMsgs);
+    }
+}
+
+// ─── Toggle de Voz ────────────────────────────────────────────────────────────
+voiceToggleBtn.addEventListener('click', () => {
+    voiceEnabled = !voiceEnabled;
+    if (voiceEnabled) {
+        voiceToggleBtn.classList.add('active-voice');
+        voiceIcon.textContent = '🔊';
+        voiceLabel.textContent = 'Voz ON';
+    } else {
+        voiceToggleBtn.classList.remove('active-voice');
+        voiceIcon.textContent = '🔇';
+        voiceLabel.textContent = 'Voz OFF';
+        cancelPlayback(); // Detener audio si estaba sonando
+    }
+    console.log(`[voice] voiceEnabled=${voiceEnabled}`);
+});
+
+// ─── Enviar Mensaje de Texto ──────────────────────────────────────────────────
+function sendTextMessage() {
+    const text = textInput.value.trim();
+    if (!text) return;
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setStatus('Sin conexión al servidor', 'error');
+        return;
+    }
+
+    cancelPlayback();
+    textInput.value = '';
+    textInput.style.height = 'auto';
+
+    // Añadir mensaje del usuario a la UI e historial
+    addHistoryEntry(text, 'user');
+    conversationHistory.push({ role: 'user', content: text });
+    trimHistory();
+
+    // Crear placeholder para la respuesta de Kelly
+    createAssistantStreamingPlaceholder();
+    setStatus('Kelly está pensando...');
+
+    // Enviar payload JSON al backend
+    const historyToSend = conversationHistory.slice(0, -1);
+    ws.send(JSON.stringify({
+        type: 'text_message',
+        text: text,
+        history: historyToSend,
+        voice_enabled: voiceEnabled,
+    }));
+}
+
+sendBtn.addEventListener('click', sendTextMessage);
+
+textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendTextMessage();
+    }
+});
+
+textInput.addEventListener('input', () => {
+    textInput.style.height = 'auto';
+    textInput.style.height = Math.min(textInput.scrollHeight, 140) + 'px';
+});
+
+// ─── WebSocket Connection ─────────────────────────────────────────────────────
 let reconnectDelay = 1000;
 const MAX_RECONNECT_DELAY = 16000;
 
@@ -486,7 +845,7 @@ function connectWebSocket() {
 
     ws.onopen = () => {
         connDot.className = 'connected';
-        setStatus('Listo para escuchar');
+        setStatus('Listo para interactuar');
         reconnectDelay = 1000;
         console.log('[ws] Conectado');
     };
@@ -504,13 +863,13 @@ function connectWebSocket() {
     };
 
     ws.onmessage = (event) => {
-        // ── Binary: raw PCM int16 chunk ────────────────────────────────────
+        // ── Mensaje binario: PCM int16 streaming
         if (event.data instanceof ArrayBuffer) {
             handleBinaryChunk(event.data);
             return;
         }
 
-        // ── Text: control JSON ─────────────────────────────────────────────
+        // ── Mensaje texto: JSON control
         try {
             const msg = JSON.parse(event.data);
 
@@ -521,7 +880,6 @@ function connectWebSocket() {
                 console.log('[ws] Audio format:', audioFormat);
 
             } else if (msg.type === 'audio_chunk_start') {
-                // Open a new ordered buffer for this sentence
                 const sid = msg.sentence_id;
                 pendingSentences[sid] = { chunks: [], done: false };
                 console.log(`[tts] Sentence #${sid} start`);
@@ -532,19 +890,24 @@ function connectWebSocket() {
                 onSentenceEnd(sid);
 
             } else if (msg.type === 'transcript') {
-                t_transcript = performance.now();   // [FE timing] STT done, transcript received
-                pendingUserText = msg.text;
+                t_transcript = performance.now();
                 addHistoryEntry(msg.text, 'user');
                 conversationHistory.push({ role: 'user', content: msg.text });
                 trimHistory();
-                console.log('[history] User:', msg.text);
+                createAssistantStreamingPlaceholder();
+                setStatus('Kelly está respondiendo...');
+
+            } else if (msg.type === 'llm_chunk') {
+                updateAssistantStreamingText(msg.text);
 
             } else if (msg.type === 'assistant_text') {
                 if (msg.text) {
                     conversationHistory.push({ role: 'assistant', content: msg.text });
                     trimHistory();
-                    addHistoryEntry(msg.text, 'assistant');
-                    console.log('[history] Kelly:', msg.text);
+                    finalizeAssistantMessage(msg.text);
+                }
+                if (!isPlaying) {
+                    setStatus('Listo para interactuar');
                 }
 
             } else if (msg.type === 'no_speech') {
@@ -555,13 +918,13 @@ function connectWebSocket() {
                 setStatus(`Error: ${msg.message}`, 'error');
                 addHistoryEntry(`Error: ${msg.message}`, 'system');
             }
-        } catch {
-            // Not JSON, ignore
+        } catch (e) {
+            console.error('[ws] Error parseando mensaje:', e);
         }
     };
 }
 
-// ─── Grabación (MediaRecorder) ────────────────────────────────────────────────
+// ─── Grabación Push-to-Talk (MediaRecorder) ───────────────────────────────────
 navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     .then(stream => {
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -584,39 +947,35 @@ navigator.mediaDevices.getUserMedia({ audio: true, video: false })
             const mtype = mediaRecorder.mimeType || 'audio/webm';
             const blob = new Blob(audioChunks, { type: mtype });
             audioChunks = [];
-            setStatus('Procesando...');
+            setStatus('Procesando voz...');
 
-            // Reset FE timing state for this interaction
             t_send = null; t_transcript = null; t_first_byte = null;
             t_play_start = null; _fe_timing_logged = false;
 
-            // B3: Enviar historial ANTES del audio binario
             const historyToSend = conversationHistory.slice();
             if (historyToSend.length > 0) {
                 ws.send(JSON.stringify({
                     type: 'audio_with_history',
                     history: historyToSend,
+                    voice_enabled: voiceEnabled,
                 }));
             }
 
-            // Enviar el audio binario y capturar t_send cuando sale por el WS
             blob.arrayBuffer().then(buf => {
                 ws.send(buf);
-                t_send = performance.now();  // [FE timing] audio sent, pipeline starts
+                t_send = performance.now();
             });
         };
 
-        // ── Push-to-Talk handlers ──────────────────────────────────────────
         const startRecording = (e) => {
             e.preventDefault();
-            cancelPlayback();   // barge-in
+            cancelPlayback();
 
             audioChunks = [];
             if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
             mediaRecorder.start();
 
-            btn.classList.add('recording');
-            btnLabel.textContent = 'Escuchando';
+            recordBtn.classList.add('recording');
             setStatus('Escuchando...');
         };
 
@@ -624,24 +983,25 @@ navigator.mediaDevices.getUserMedia({ audio: true, video: false })
             e.preventDefault();
             if (mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
-                btn.classList.remove('recording');
-                btnLabel.textContent = 'Hablar';
+                recordBtn.classList.remove('recording');
             }
         };
 
-        btn.addEventListener('mousedown', startRecording);
-        btn.addEventListener('mouseup', stopRecording);
-        btn.addEventListener('touchstart', startRecording, { passive: false });
-        btn.addEventListener('touchend', stopRecording, { passive: false });
-        btn.addEventListener('mouseleave', stopRecording);
+        recordBtn.addEventListener('mousedown', startRecording);
+        recordBtn.addEventListener('mouseup', stopRecording);
+        recordBtn.addEventListener('touchstart', startRecording, { passive: false });
+        recordBtn.addEventListener('touchend', stopRecording, { passive: false });
+        recordBtn.addEventListener('mouseleave', stopRecording);
     })
     .catch(err => {
-        setStatus('Permiso de micrófono denegado', 'error');
-        btn.disabled = true;
-        console.error('[mic] Error:', err);
+        setStatus('Modo solo texto (micrófono no disponible)', 'active');
+        recordBtn.disabled = true;
+        recordBtn.title = 'Micrófono no disponible';
+        recordBtn.style.opacity = '0.5';
+        console.warn('[mic] Micrófono no disponible:', err);
     });
 
-// ─── Iniciar WebSocket ────────────────────────────────────────────────────────
+// Iniciar WebSocket
 connectWebSocket();
 </script>
 </body>

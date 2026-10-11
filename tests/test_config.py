@@ -34,6 +34,17 @@ class TestDefaultSettings:
         assert s.host == "0.0.0.0"
         assert s.port == 8000
 
+    def test_default_llm_max_tokens(self):
+        from app.config import Settings
+        s = Settings()
+        assert s.llm_max_tokens == 2048
+
+    def test_default_history_limits(self):
+        from app.config import Settings
+        s = Settings()
+        assert s.history_max_turns == 12
+        assert s.history_max_tokens_estimate == 8192
+
 
 class TestEnvOverrides:
     def test_env_overrides_temperature(self):
@@ -66,6 +77,22 @@ class TestEnvOverrides:
             from app.config import Settings
             s = Settings()
             assert s.tts_min_chunk_chars == 50
+
+    def test_env_overrides_llm_max_tokens(self):
+        with patch.dict(os.environ, {"KELLY_LLM_MAX_TOKENS": "4096"}):
+            from app.config import Settings
+            s = Settings()
+            assert s.llm_max_tokens == 4096
+
+    def test_env_overrides_history_limits(self):
+        with patch.dict(os.environ, {
+            "KELLY_HISTORY_MAX_TURNS": "20",
+            "KELLY_HISTORY_MAX_TOKENS_ESTIMATE": "16384",
+        }):
+            from app.config import Settings
+            s = Settings()
+            assert s.history_max_turns == 20
+            assert s.history_max_tokens_estimate == 16384
 
 
 class TestPathHelpers:

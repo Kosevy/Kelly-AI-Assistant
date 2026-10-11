@@ -1,0 +1,31 @@
+{
+  "label": "threads5_ngl24_np1_ctx16k",
+  "runs": 3,
+  "avg_ttft_ms": 432.8,
+  "avg_total_ms": 13139.9,
+  "avg_tokens": 150.0,
+  "avg_toks_per_sec": 12.21,
+  "runs_detail": [
+    {
+      "label": "threads5_ngl24_np1_ctx16k",
+      "ttft_ms": 1116.7,
+      "total_ms": 17600.7,
+      "tokens": 150,
+      "toks_per_sec": 9.04
+    },
+    {
+      "label": "threads5_ngl24_np1_ctx16k",
+      "ttft_ms": 105.4,
+      "total_ms": 11307.4,
+      "tokens": 150,
+      "toks_per_sec": 13.3
+    },
+    {
+      "label": "threads5_ngl24_np1_ctx16k",
+      "ttft_ms": 76.2,
+      "total_ms": 10511.7,
+      "tokens": 150,
+      "toks_per_sec": 14.28
+    }
+  ]
+}

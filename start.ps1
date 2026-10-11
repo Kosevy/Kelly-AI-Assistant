@@ -48,16 +48,24 @@ if (Test-Path $llamaExe) {
     Write-Host "[->] Lanzando llama-server (puerto 8085)..." -ForegroundColor Yellow
 
     # Ryzen 5 7600X: 6 nucleos fisicos. Reservamos 1 para SO + STT = --threads 5.
-    # -ngl 8: offload 8 capas a GPU (~1.5 GB VRAM adicional, caben en ~2.8 GB libres).
-    # Ajustar -ngl si nvidia-smi reporta OOM (bajar a 4 o 0).
-    $llamaArgs = "-m `"$modelPath`" --port 8085 --host 127.0.0.1 --threads 5 --threads-batch 5 -ngl 8"
+    # -ngl 24: offload de 24 capas a GPU en RTX 3060 12GB (~30-50 tok/s). Si hay OOM, bajar a 20.
+    # -np 1: 1 slot de contexto para monousuario (evita reservar 4x memoria).
+    # -c 16384: contexto de 16k tokens para documentos y conversaciones extensas.
+    # -ctk q8_0 -ctv q8_0: cuantizacion del KV cache a 8-bit para ahorrar ~50% VRAM de contexto.
+    $llamaArgs = "-m `"$modelPath`" --host 127.0.0.1 --port 8085 " +
+                 "--threads 5 --threads-batch 5 " +
+                 "-ngl 24 " +
+                 "-np 1 " +
+                 "-c 16384 " +
+                 "-ctk q8_0 -ctv q8_0"
 
     Start-Process -FilePath "cmd.exe" `
         -ArgumentList "/k title llama-server && `"$llamaExe`" $llamaArgs" `
         -WorkingDirectory $ProjectRoot `
         -WindowStyle Normal
 
-    Write-Host "[OK] llama-server lanzado (threads=5, ngl=8)" -ForegroundColor Green
+    Write-Host "[INFO] llama-server: threads=5 | ngl=24 | np=1 | ctx=16384 | kv=q8_0" -ForegroundColor Green
+    Write-Host "[OK] llama-server lanzado" -ForegroundColor Green
     Write-Host "[...] Esperando 5s para que el modelo cargue..." -ForegroundColor Gray
     Start-Sleep -Seconds 5
 } else {

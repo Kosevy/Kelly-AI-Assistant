@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         default=0.4, description="LLM sampling temperature (lower = more deterministic)"
     )
     llm_max_tokens: int = Field(
-        default=120, description="Maximum tokens to generate"
+        default=2048, description="Maximum tokens to generate"
     )
     llm_top_p: float = Field(default=0.9, description="Top-p nucleus sampling")
     llm_repeat_penalty: float = Field(
@@ -149,11 +149,11 @@ class Settings(BaseSettings):
 
     # ─── Conversational History ───────────────────────────────────────────
     history_max_turns: int = Field(
-        default=6,
+        default=12,
         description="Maximum turns retained in history (1 turn = user + assistant)",
     )
     history_max_tokens_estimate: int = Field(
-        default=2048,
+        default=8192,
         description="Estimated token ceiling for conversation history (len/4)",
     )
 
