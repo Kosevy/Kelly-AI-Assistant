@@ -66,6 +66,7 @@ import asyncio
 import io
 import json
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -73,7 +74,7 @@ from typing import Any
 import httpx
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from faster_whisper import WhisperModel
 from TTS.api import TTS
@@ -82,7 +83,11 @@ import pysbd
 from app.text_preprocess import normalize_for_tts
 from app.stt_prompt import build_initial_prompt
 from app.system_prompt import build_system_prompt
-from app.protocol import parse_history_payload, parse_text_message_payload
+from app.protocol import parse_history_payload, parse_text_message_payload, parse_attachment_ids_payload
+from app.tools import TOOLS
+from app.llm_client import stream_chat_with_tools, format_chat_messages
+from app.file_extractors import extract_by_extension
+from app.file_chunker import truncate_to_token_budget, estimate_tokens
 
 # ─── 5. Model initialization ──────────────────────────────────────────────────
 logger.info("[startup] Loading STT model (faster-whisper)...")
@@ -163,31 +168,56 @@ logger.info(
 
 from contextlib import asynccontextmanager
 
+# In-memory storage for uploaded file attachments: {attachment_id: metadata_and_text}
+UPLOADED_ATTACHMENTS: dict[str, dict[str, Any]] = {}
+
+
+async def _cleanup_uploads_loop() -> None:
+    """
+    Tarea periódica en segundo plano que elimina archivos subidos y entradas en memoria
+    que hayan superado settings.upload_ttl_minutes.
+    """
+    while True:
+        try:
+            await asyncio.sleep(600)  # Cada 10 minutos
+            now = time.time()
+            ttl_seconds = settings.upload_ttl_minutes * 60
+            expired_ids = [
+                att_id
+                for att_id, meta in UPLOADED_ATTACHMENTS.items()
+                if (now - meta.get("created_at", 0)) > ttl_seconds
+            ]
+            for att_id in expired_ids:
+                meta = UPLOADED_ATTACHMENTS.pop(att_id, None)
+                if meta and "path" in meta:
+                    try:
+                        p = Path(meta["path"])
+                        if p.exists():
+                            p.unlink()
+                            logger.info(f"[upload_cleanup] Archivo expirado eliminado: {p.name}")
+                    except Exception as err:
+                        logger.warning(f"[upload_cleanup] Error borrando {meta.get('path')}: {err}")
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error(f"[upload_cleanup] Error en ciclo de limpieza: {exc}")
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """
-    FastAPI lifespan handler: runs _warmup_llm() before serving requests.
-
-    Why warmup matters:
-      llama-server lazy-loads model weights on the first request. That first
-      prefill can take 10-15 s on CPU (full context allocation + weight loading).
-      Pre-warming eliminates this cold-start latency so every user interaction
-      has consistent TTFT, which is critical for a voice assistant where
-      multi-second delays feel like the app is broken.
-
-    Why only 3 tokens:
-      We want to trigger weight loading, not generate a real response.
-      3 tokens is the minimum to force a full prefill cycle. stream=False avoids
-      keeping a connection open unnecessarily.
-
-    Why not block startup:
-      If llama-server isn't up yet (race condition), we warn and continue.
-      The health endpoint will report LLM as degraded and clients will retry.
+    FastAPI lifespan handler: runs _warmup_llm() and launches attachment TTL cleanup.
     """
     await _warmup_llm()
-    yield
-    # No teardown needed — models are cleaned up by the OS on process exit.
+    cleanup_task = asyncio.create_task(_cleanup_uploads_loop(), name="upload_cleanup")
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def _warmup_llm() -> None:
@@ -195,15 +225,14 @@ async def _warmup_llm() -> None:
     Send a trivial prompt to llama-server to force KV-cache warm-up.
     Non-blocking: logs warning on failure, never raises.
     """
-    logger.info("[startup] LLM warmup — triggering KV cache load...")
+    logger.info("[startup] LLM warmup — triggering KV cache load via chat completions...")
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
-                settings.llm_server_url,
+                settings.llm_chat_url,
                 json={
-                    # Minimal ChatML prompt matching Qwen2.5-Instruct format
-                    "prompt": "<|im_start|>user\nhola<|im_end|>\n<|im_start|>assistant\n",
-                    "n_predict": 3,
+                    "messages": [{"role": "user", "content": "hola"}],
+                    "max_tokens": 3,
                     "temperature": 0.0,
                     "stream": False,
                 },
@@ -221,25 +250,16 @@ app = FastAPI(title="Kelly Voice Assistant", version="0.5.0", lifespan=_lifespan
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _build_prompt_with_history(
-    user_text: str,
+def _prepare_history(
     history: list[dict[str, str]],
-    input_mode: str = "voice",
-) -> str:
+    system_prompt: str,
+    user_text: str,
+) -> list[dict[str, str]]:
     """
-    Build ChatML prompt for Qwen2.5 with conversational history.
-
     Truncates history by turn count (max history_max_turns) and by estimated
     token count (max history_max_tokens_estimate, using len/4 heuristic).
     Drops oldest user+assistant pairs first.
     """
-    fecha_hora = datetime.now().strftime("%A, %d de %B de %Y. La hora es %I:%M %p")
-    system_prompt = build_system_prompt(
-        _system_prompt_template,
-        current_datetime=fecha_hora,
-        input_mode=input_mode,
-    )
-
     max_tok = settings.history_max_tokens_estimate
     working_history = list(history)
 
@@ -260,6 +280,57 @@ def _build_prompt_with_history(
             f"[prompt] History truncated: {len(history)} -> {len(working_history)} messages "
             f"(limit ~{max_tok} estimated tokens)"
         )
+    return working_history
+
+
+def _build_attachments_text(attachment_ids: list[str]) -> str:
+    """
+    Construye el bloque de texto con los adjuntos para ser inyectado en el prompt.
+    """
+    if not attachment_ids:
+        return ""
+
+    blocks: list[str] = [
+        "[Archivos adjuntos provistos por el usuario (su contenido ya está extraído abajo, responde directamente basándote en este texto sin llamar a read_file):]"
+    ]
+    for att_id in attachment_ids:
+        entry = UPLOADED_ATTACHMENTS.get(att_id)
+        if not entry:
+            logger.warning(f"[attachments] Attachment ID no encontrado: {att_id}")
+            continue
+
+        filename = entry.get("filename", "archivo")
+        truncated = entry.get("truncated", False)
+        status_tag = " (truncado por límite de tokens)" if truncated else ""
+        content = entry.get("text", "")
+
+        blocks.append(
+            f"--- Adjunto: {filename}{status_tag} ---\n"
+            f"{content}\n"
+            f"--- Fin adjunto ---"
+        )
+
+    if len(blocks) == 1:
+        return ""
+    return "\n\n".join(blocks)
+
+
+
+def _build_prompt_with_history(
+    user_text: str,
+    history: list[dict[str, str]],
+    input_mode: str = "voice",
+) -> str:
+    """
+    Build ChatML prompt for Qwen2.5 with conversational history (legacy fallback).
+    """
+    fecha_hora = datetime.now().strftime("%A, %d de %B de %Y. La hora es %I:%M %p")
+    system_prompt = build_system_prompt(
+        _system_prompt_template,
+        current_datetime=fecha_hora,
+        input_mode=input_mode,
+    )
+    working_history = _prepare_history(history, system_prompt, user_text)
 
     parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>\n"]
     for msg in working_history:
@@ -276,6 +347,7 @@ def _build_prompt_with_history(
         f"~{estimated_tokens} estimated tokens | {len(prompt)} chars"
     )
     return prompt
+
 
 
 def _iter_inference_stream(text: str):
@@ -516,6 +588,7 @@ class _PipelineContext:
         self.active_task: asyncio.Task | None = None
         self.pending_history: list[dict[str, str]] = []
         self.pending_voice_enabled: bool = True
+        self.pending_attachment_ids: list[str] = []
 
     def request_cancel(self) -> None:
         self.cancel_event.set()
@@ -746,12 +819,15 @@ async def _run_llm_and_tts(
     voice_enabled: bool = True,
     t_start: float | None = None,
     stt_latency_ms: float = 0.0,
+    attachments_text: str = "",
 ) -> None:
     """
     Core pipeline: LLM streaming + optional TTS synthesis -> WebSocket.
 
     Supports:
       - input_mode="voice" or "text": passes mode to dynamic prompt builder.
+      - attachments_text: appended to user message for file context injection.
+      - Function Calling: transparent tool calling loop via stream_chat_with_tools.
       - voice_enabled=True: spawns _tts_worker to stream synthesized audio chunks concurrently.
       - voice_enabled=False: bypasses TTS completely, saving GPU/CPU compute and latency.
       - llm_chunk streaming: sends {"type": "llm_chunk", "text": token} for live UI updates.
@@ -760,24 +836,27 @@ async def _run_llm_and_tts(
     if t_start is None:
         t_start = time.perf_counter()
 
-    formatted_prompt = _build_prompt_with_history(user_text, history, input_mode=input_mode)
-    payload = {
-        "prompt": formatted_prompt,
-        "temperature": settings.llm_temperature,
-        "n_predict": settings.llm_max_tokens,
-        "top_p": settings.llm_top_p,
-        "repeat_penalty": settings.llm_repeat_penalty,
-        "stop": ["<|im_end|>", "<|endoftext|>"],
-        "stream": True,
-    }
+    fecha_hora = datetime.now().strftime("%A, %d de %B de %Y. La hora es %I:%M %p")
+    system_prompt = build_system_prompt(
+        _system_prompt_template,
+        current_datetime=fecha_hora,
+        input_mode=input_mode,
+    )
+    working_history = _prepare_history(history, system_prompt, user_text)
+    messages = format_chat_messages(
+        user_text=user_text,
+        history=working_history,
+        system_prompt=system_prompt,
+        attachments_text=attachments_text,
+    )
 
     t_llm_start = time.perf_counter()
-    t_first_token: float | None = None
     buffer = ""
     sentence_id = 0
     t_first_tts_enqueue: float | None = None
     full_response = ""
 
+    llm_metrics: dict[str, Any] = {"ttft_ms": None}
     tts_metrics: dict[str, Any] = {
         "tts_first_chunk_ms": None,
         "tts_total_streaming_ms": 0.0,
@@ -809,58 +888,44 @@ async def _run_llm_and_tts(
             sentence_id += 1
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream("POST", settings.llm_server_url, json=payload) as response:
-                async for line in response.aiter_lines():
-                    if ctx.cancel_event.is_set():
-                        logger.info(f"[pipeline] Cancelled during LLM streaming (mode={input_mode})")
-                        break
+        async for token in stream_chat_with_tools(
+            messages=messages,
+            tools=TOOLS,
+            server_url=settings.llm_chat_url,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            top_p=settings.llm_top_p,
+            repeat_penalty=settings.llm_repeat_penalty,
+            cancel_event=ctx.cancel_event,
+            metrics=llm_metrics,
+        ):
+            if ctx.cancel_event.is_set():
+                logger.info(f"[pipeline] Cancelled during LLM streaming (mode={input_mode})")
+                break
 
-                    if not line or not line.startswith("data: "):
-                        continue
+            buffer += token
+            full_response += token
 
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
+            # Send token chunk to client for real-time text streaming
+            if not ctx.cancel_event.is_set():
+                await websocket.send_json({"type": "llm_chunk", "text": token})
 
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+            if voice_enabled:
+                sentences = _segmenter.segment(buffer)
+                if len(sentences) > 1:
+                    complete = sentences[:-1]
+                    remainder = sentences[-1]
 
-                    token = chunk.get("content", "")
-                    if not token:
-                        continue
+                    for sent in complete:
+                        sent = sent.strip()
+                        if len(sent) < settings.tts_min_chunk_chars:
+                            remainder = sent + " " + remainder
+                            continue
+                        if ctx.cancel_event.is_set():
+                            break
+                        _enqueue_sentence(sent)
 
-                    if t_first_token is None:
-                        t_first_token = time.perf_counter()
-                        logger.debug(
-                            f"[pipeline] LLM TTFT ({input_mode}): {(t_first_token - t_llm_start)*1000:.0f}ms"
-                        )
-
-                    buffer += token
-                    full_response += token
-
-                    # Send token chunk to client for real-time text streaming
-                    if not ctx.cancel_event.is_set():
-                        await websocket.send_json({"type": "llm_chunk", "text": token})
-
-                    if voice_enabled:
-                        sentences = _segmenter.segment(buffer)
-                        if len(sentences) > 1:
-                            complete = sentences[:-1]
-                            remainder = sentences[-1]
-
-                            for sent in complete:
-                                sent = sent.strip()
-                                if len(sent) < settings.tts_min_chunk_chars:
-                                    remainder = sent + " " + remainder
-                                    continue
-                                if ctx.cancel_event.is_set():
-                                    break
-                                _enqueue_sentence(sent)
-
-                            buffer = remainder
+                    buffer = remainder
 
         # ── Final remainder for TTS ───────────────────────────────────────────
         if voice_enabled and buffer.strip() and len(buffer.strip()) >= settings.tts_min_final_chars:
@@ -872,8 +937,8 @@ async def _run_llm_and_tts(
                 f"\"{buffer.strip()}\""
             )
 
-    except httpx.RequestError as e:
-        logger.error(f"[pipeline] LLM connection error: {e}")
+    except (httpx.RequestError, RuntimeError) as e:
+        logger.error(f"[pipeline] LLM connection/execution error: {e}")
         await websocket.send_json({"type": "error", "message": "LLM connection error."})
         if voice_enabled and tts_queue and worker_task:
             await tts_queue.put(None)
@@ -924,12 +989,15 @@ async def _run_llm_and_tts(
 
     # ── Final metrics ──────────────────────────────────────────────────────────
     t_end = time.perf_counter()
-    t_first_token = t_first_token or t_llm_start
+    ttft_ms = llm_metrics.get("ttft_ms")
+    if ttft_ms is None:
+        ttft_ms = (t_end - t_llm_start) * 1000.0
+
     metrics: dict[str, Any] = {
         "input_mode": input_mode,
         "voice_enabled": voice_enabled,
         "stt_latency_ms": round(stt_latency_ms, 1),
-        "llm_ttft_ms": round((t_first_token - t_llm_start) * 1000, 1),
+        "llm_ttft_ms": round(ttft_ms, 1),
         "llm_total_ms": round((t_end - t_llm_start) * 1000, 1),
         "tts_first_chunk_ms": tts_metrics.get("tts_first_chunk_ms"),
         "tts_total_streaming_ms": round(tts_metrics.get("tts_total_streaming_ms", 0.0), 1),
@@ -954,6 +1022,7 @@ async def _run_pipeline(
     history: list[dict[str, str]],
     ctx: _PipelineContext,
     voice_enabled: bool = True,
+    attachment_ids: list[str] | None = None,
 ) -> None:
     """
     Voice pipeline: STT -> LLM streaming -> (optional TTS) -> WebSocket.
@@ -983,6 +1052,7 @@ async def _run_pipeline(
         logger.debug("[pipeline] Cancelled after STT")
         return
 
+    attachments_text = _build_attachments_text(attachment_ids or [])
     await _run_llm_and_tts(
         websocket=websocket,
         user_text=user_text,
@@ -992,6 +1062,7 @@ async def _run_pipeline(
         voice_enabled=voice_enabled,
         t_start=t_start,
         stt_latency_ms=stt_latency_ms,
+        attachments_text=attachments_text,
     )
 
 
@@ -1001,6 +1072,7 @@ async def _run_text_pipeline(
     history: list[dict[str, str]],
     ctx: _PipelineContext,
     voice_enabled: bool = False,
+    attachment_ids: list[str] | None = None,
 ) -> None:
     """
     Text pipeline: LLM streaming (input_mode="text") -> (optional TTS) -> WebSocket.
@@ -1011,6 +1083,7 @@ async def _run_text_pipeline(
         logger.debug("[pipeline] Cancelled before text pipeline execution")
         return
 
+    attachments_text = _build_attachments_text(attachment_ids or [])
     await _run_llm_and_tts(
         websocket=websocket,
         user_text=user_text,
@@ -1020,6 +1093,7 @@ async def _run_text_pipeline(
         voice_enabled=voice_enabled,
         t_start=t_start,
         stt_latency_ms=0.0,
+        attachments_text=attachments_text,
     )
 
 
@@ -1073,10 +1147,10 @@ async def health_check():
 
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            llm_health_url = settings.llm_server_url.replace("/completion", "/health")
+            llm_health_url = settings.llm_chat_url.replace("/v1/chat/completions", "/health")
             resp = await client.get(llm_health_url)
             if resp.status_code == 200:
-                components["llm"] = {"status": "ok", "url": settings.llm_server_url}
+                components["llm"] = {"status": "ok", "url": settings.llm_chat_url}
             else:
                 components["llm"] = {"status": "degraded", "http_status": resp.status_code}
                 all_ok = False
@@ -1103,6 +1177,84 @@ async def health_check():
         content={"status": "ok" if all_ok else "degraded", "components": components},
         status_code=status_code,
     )
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
+    """
+    Recibe un archivo vía multipart. Lo guarda temporalmente en upload_dir.
+    Retorna metadata + preview del texto extraído.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nombre de archivo inválido.")
+
+    contents = await file.read()
+    size_bytes = len(contents)
+    max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
+
+    if size_bytes > max_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"El archivo excede el tamaño máximo permitido de {settings.max_upload_size_mb} MB.",
+        )
+
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    attachment_id = str(uuid.uuid4())
+    suffix = Path(file.filename).suffix
+    saved_filename = f"{attachment_id}{suffix}"
+    saved_path = upload_dir / saved_filename
+
+    try:
+        saved_path.write_bytes(contents)
+    except Exception as exc:
+        logger.error(f"[upload] Error escribiendo archivo en disco: {exc}")
+        raise HTTPException(status_code=500, detail="Error interno al almacenar el archivo.")
+
+    try:
+        raw_text = extract_by_extension(saved_path)
+    except ValueError as exc:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"[upload] Error extrayendo texto de {file.filename}: {exc}")
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Error extrayendo texto del archivo: {exc}")
+
+    truncated_text, was_truncated = truncate_to_token_budget(raw_text, settings.max_file_tokens)
+    estimated_toks = estimate_tokens(truncated_text)
+
+    preview_text = truncated_text[:200].strip()
+    if len(truncated_text) > 200:
+        preview_text += "..."
+
+    entry = {
+        "attachment_id": attachment_id,
+        "filename": file.filename,
+        "path": str(saved_path),
+        "size_bytes": size_bytes,
+        "preview": preview_text,
+        "truncated": was_truncated,
+        "estimated_tokens": estimated_toks,
+        "text": truncated_text,
+        "created_at": time.time(),
+    }
+    UPLOADED_ATTACHMENTS[attachment_id] = entry
+
+    logger.info(
+        f"[upload] Archivo cargado: {file.filename} (id={attachment_id}, {size_bytes} bytes, "
+        f"~{estimated_toks} tokens, truncado={was_truncated})"
+    )
+
+    return {
+        "attachment_id": attachment_id,
+        "filename": file.filename,
+        "size_bytes": size_bytes,
+        "preview": preview_text,
+        "truncated": was_truncated,
+        "estimated_tokens": estimated_toks,
+    }
 
 
 # ─── WebSocket Handler ────────────────────────────────────────────────────────
@@ -1140,6 +1292,8 @@ async def audio_websocket(websocket: WebSocket):
                 history = ctx.pending_history
                 ctx.pending_history = []
                 voice_enabled = ctx.pending_voice_enabled
+                attachment_ids = ctx.pending_attachment_ids
+                ctx.pending_attachment_ids = []
 
                 ctx.request_cancel()
                 await asyncio.sleep(0)
@@ -1153,6 +1307,7 @@ async def audio_websocket(websocket: WebSocket):
                         history=history,
                         ctx=ctx,
                         voice_enabled=voice_enabled,
+                        attachment_ids=attachment_ids,
                     )
                 )
 
@@ -1174,13 +1329,16 @@ async def audio_websocket(websocket: WebSocket):
                     history_raw = msg.get("history", [])
                     ctx.pending_history = parse_history_payload(history_raw)
                     ctx.pending_voice_enabled = bool(msg.get("voice_enabled", True))
+                    ctx.pending_attachment_ids = parse_attachment_ids_payload(msg.get("attachment_ids", []))
                     logger.debug(
-                        f"[ws] History received: {len(ctx.pending_history)} messages | voice_enabled={ctx.pending_voice_enabled}"
+                        f"[ws] History received: {len(ctx.pending_history)} messages | "
+                        f"voice_enabled={ctx.pending_voice_enabled} | "
+                        f"attachment_ids={len(ctx.pending_attachment_ids)}"
                     )
 
                 elif msg_type == "text_message":
                     try:
-                        clean_text, history, voice_enabled = parse_text_message_payload(msg)
+                        clean_text, history, voice_enabled, attachment_ids = parse_text_message_payload(msg)
                     except ValueError as err:
                         logger.warning(f"[ws] Invalid text_message: {err}")
                         continue
@@ -1191,7 +1349,7 @@ async def audio_websocket(websocket: WebSocket):
 
                     logger.info(
                         f"[ws] text_message received: \"{clean_text[:60]}{'...' if len(clean_text) > 60 else ''}\" "
-                        f"| history={len(history)} | voice_enabled={voice_enabled}"
+                        f"| history={len(history)} | voice_enabled={voice_enabled} | attachments={len(attachment_ids)}"
                     )
 
                     ctx.active_task = asyncio.create_task(
@@ -1201,6 +1359,7 @@ async def audio_websocket(websocket: WebSocket):
                             history=history,
                             ctx=ctx,
                             voice_enabled=voice_enabled,
+                            attachment_ids=attachment_ids,
                         )
                     )
 
