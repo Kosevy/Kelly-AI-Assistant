@@ -197,9 +197,27 @@ class Settings(BaseSettings):
         description="Tiempo de vida (TTL) de archivos subidos antes de ser eliminados (minutos)",
     )
 
-    @field_validator("allowed_paths", mode="after")
+    # ─── Calendar System ───────────────────────────────────────────────────
+    calendar_path: str = Field(
+        default="data/calendar.yaml",
+        description="Ruta al archivo YAML del calendario local",
+    )
+    calendar_backup_count: int = Field(
+        default=10,
+        description="Cantidad máxima de backups rotativos del calendario",
+    )
+    calendar_backup_dir: str = Field(
+        default="data/calendar_backups",
+        description="Directorio para backups automáticos del calendario",
+    )
+    free_slots_busy_types: list[str] | str = Field(
+        default=["class", "study", "exam", "entregable", "presentacion", "practica"],
+        description="Tipos de eventos o bloques considerados ocupados para cálculo de tiempo libre",
+    )
+
+    @field_validator("allowed_paths", "free_slots_busy_types", mode="after")
     @classmethod
-    def _parse_allowed_paths(cls, v: Any) -> list[str]:
+    def _parse_list_or_csv(cls, v: Any) -> list[str]:
         if isinstance(v, str):
             v_str = v.strip()
             if v_str.startswith("[") and v_str.endswith("]"):
@@ -218,6 +236,12 @@ class Settings(BaseSettings):
 
     def get_voice_sample_path(self) -> Path:
         return Path(self.voice_sample_path)
+
+    def get_calendar_path(self) -> Path:
+        return Path(self.calendar_path)
+
+    def get_calendar_backup_dir(self) -> Path:
+        return Path(self.calendar_backup_dir)
 
 
 settings = Settings()

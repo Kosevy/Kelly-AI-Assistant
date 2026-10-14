@@ -1,0 +1,83 @@
+# Calendario de Kelly — editar una vez por semestre.
+# Estructura:
+#   - metadata: datos del semestre (fechas, semanas de exámenes).
+#   - courses: cursos del ciclo con dificultad (1-5) y temas.
+#   - recurring_blocks: bloques semanales (clases, transporte, comidas).
+#   - events: eventos puntuales (parciales, entregas, prácticas).
+# Kelly puede añadir eventos por conversación. Para ediciones grandes, editar aquí.
+
+metadata:
+  student_name: "Nombre del estudiante"
+  semester: "2026-1"
+  semester_start: 2026-03-15
+  semester_end: 2026-07-20
+  exam_weeks:
+    parciales: 8
+    finales: 15
+
+courses:
+  - id: "calc3"
+    name: "Cálculo III"
+    difficulty: 4          # 1-5, autoevaluación de dificultad
+    sessions_per_week: 2
+    topics:
+      - "Series"
+      - "Integrales múltiples"
+      - "EDOs"
+
+  - id: "bd"
+    name: "Base de Datos"
+    difficulty: 3
+    sessions_per_week: 2
+    topics:
+      - "Modelo relacional"
+      - "SQL"
+      - "Normalización"
+
+recurring_blocks:
+  - name: "Cálculo III - Teoría"
+    course_id: "calc3"
+    type: "class"          # class, transport, meal, exercise, study, other
+    day_of_week: ["monday", "wednesday"]
+    start_time: "08:00"
+    end_time: "10:00"
+    from_date: 2026-03-15
+    to_date: 2026-07-15
+
+  - name: "Transporte ida"
+    type: "transport"
+    day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    start_time: "07:00"
+    end_time: "07:45"
+    from_date: 2026-03-15
+    to_date: 2026-07-15
+
+  - name: "Almuerzo"
+    type: "meal"
+    day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    start_time: "13:00"
+    end_time: "14:00"
+    from_date: 2026-03-15
+    to_date: 2026-07-15
+
+events:
+  - id: "parcial_calc3"
+    name: "Parcial Cálculo III"
+    type: "exam"           # exam, entregable, presentacion, practica, personal
+    course_id: "calc3"
+    date: 2026-05-12
+    start_time: "10:00"
+    duration_minutes: 120
+    weight: 0.30           # opcional, peso en la nota final
+    topics_covered:
+      - "Series"
+      - "Integrales múltiples"
+    notes: "Cubre capítulos 1-5 del libro."
+
+  - id: "entrega_bd_1"
+    name: "Entrega Proyecto BD - Avance 1"
+    type: "entregable"
+    course_id: "bd"
+    date: 2026-04-05
+    estimated_hours: 15
+    notes: "Modelo entidad-relación + primeras tablas."
