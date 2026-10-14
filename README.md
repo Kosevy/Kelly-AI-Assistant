@@ -336,6 +336,40 @@ If accuracy remains insufficient after these improvements, evaluate `faster-whis
 
 ---
 
+## Lectura de Archivos Locales & Function Calling
+
+Kelly cuenta con capacidades nativas para interactuar con tus archivos locales de estudio y desarrollo, ya sea mediante subida directa (Drag & Drop en la interfaz web) o mediante **Function Calling** cuando el modelo decide consultar el disco.
+
+### 1. Formatos Soportados
+
+La extracción de texto se realiza de forma 100% local sin dependencias en servicios externos:
+- **Documentos PDF**: Extraídos con `PyMuPDF` (`fitz`), preservando el layout y texto estructurado con alta velocidad.
+- **Archivos de Código y Texto**: `.py`, `.md`, `.txt`, `.cpp`, `.c`, `.h`, `.hpp`, `.ts`, `.js`, `.java`, `.json`, `.yaml`, `.yml`, `.html`, `.css`, `.sql`. Decodificados como UTF-8 con fallback automático a Latin-1.
+
+### 2. Sandboxing de Seguridad en Windows
+
+El acceso al disco está restringido estrictamente a las rutas declaradas en la variable `KELLY_ALLOWED_PATHS`:
+- **Rutas permitidas por defecto:** `D:\Git projects` y `D:\Ciclo 6`.
+- **Protección contra Path Traversal:** Se resuelven symlinks, componentes relativos (`..`) y nombres de unidad en Windows de forma case-insensitive antes de validar la pertenencia al sandbox.
+- **Manejo de errores:** Intentos de lectura fuera del sandbox lanzan un `PermissionError` interno capturado por el ejecutor de herramientas, permitiendo que Kelly explique cortésmente al usuario por qué no puede acceder sin exponer archivos del sistema (como `C:\Windows\System32`).
+
+### 3. Presupuesto de Tokens y Truncado
+
+- **Límite por archivo:** `KELLY_MAX_FILE_TOKENS=5500` (~22,000 caracteres con ratio 0.25 tokens/char).
+- Si un archivo excede el presupuesto, se truncan las páginas/líneas posteriores preservando el inicio del documento y notificando al LLM y a la interfaz con la etiqueta `(truncado)`.
+- **Límite de subida HTTP:** `KELLY_MAX_UPLOAD_SIZE_MB=50`.
+- **TTL de archivos temporales:** `KELLY_UPLOAD_TTL_MINUTES=60` con limpieza periódica en segundo plano cada 10 minutos.
+
+### 4. Function Calling con Qwen 2.5 y llama.cpp
+
+El backend utiliza el endpoint estándar de OpenAI `/v1/chat/completions` en `llama-server`:
+- **Herramientas disponibles:**
+  - `read_file(path)`: Lee el contenido de un archivo en las rutas permitidas.
+  - `list_directory(path)`: Lista archivos y subcarpetas dentro de las rutas permitidas.
+- **Bucle de ejecución:** Si el LLM emite `finish_reason: "tool_calls"`, Kelly ejecuta la función solicitada de manera asíncrona (timeout de 10s), inyecta el resultado con rol `tool`, y reanuda el streaming hasta generar la respuesta final (con un límite de seguridad de 3 iteraciones).
+
+---
+
 ## Model Licenses & Attributions
 
 | Component     | Model / Engine                  | License                                                                      |
