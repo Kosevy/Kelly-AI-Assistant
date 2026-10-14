@@ -7,11 +7,11 @@
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#1e88e5">
 
-    <!-- Markdown, Syntax Highlighting & Sanitization via CDN -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <!-- Markdown, Syntax Highlighting & Sanitization (Vendorized local) -->
+    <link rel="stylesheet" href="/static/vendor/highlight/github-dark.min.css">
+    <script src="/static/vendor/marked/marked.min.js"></script>
+    <script src="/static/vendor/highlight/highlight.min.js"></script>
+    <script src="/static/vendor/dompurify/purify.min.js"></script>
 
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,6 +28,7 @@
         }
 
         #chat-container {
+            position: relative;
             width: min(100%, 54rem);
             height: 96dvh;
             display: flex;
@@ -38,6 +39,137 @@
             overflow: hidden;
             box-shadow: 0 12px 35px rgba(0, 0, 0, 0.55);
         }
+
+        /* ── Drag & Drop Overlay ─────────────────────────────────────────── */
+        #drop-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(11, 17, 32, 0.92);
+            backdrop-filter: blur(6px);
+            border: 2px dashed #38bdf8;
+            border-radius: 1rem;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            color: #38bdf8;
+            z-index: 50;
+            pointer-events: none;
+            transition: all 0.2s ease;
+        }
+        #drop-overlay.active {
+            display: flex;
+        }
+        .drop-icon {
+            font-size: 3rem;
+            animation: bounce 1s infinite alternate;
+        }
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-8px); }
+        }
+        .drop-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #f1f5f9;
+        }
+        .drop-subtitle {
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+
+        /* ── Barra de Adjuntos (Chips) ────────────────────────────────────── */
+        .attachments-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem 0 1rem;
+            background: #0b1120;
+        }
+        .attachments-bar:empty {
+            display: none;
+            padding: 0;
+        }
+        .attachment-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            font-size: 0.8rem;
+            padding: 0.3rem 0.65rem;
+            border-radius: 9999px;
+            max-width: 18rem;
+            transition: all 0.15s;
+        }
+        .attachment-chip.uploading {
+            opacity: 0.75;
+            border-style: dashed;
+        }
+        .attachment-chip.truncated {
+            border-color: #f59e0b;
+            background: #292524;
+        }
+        .attachment-chip .chip-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .attachment-chip .chip-info {
+            font-size: 0.7rem;
+            color: #94a3b8;
+        }
+        .attachment-chip .chip-remove {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 0.15rem;
+            border-radius: 50%;
+            transition: color 0.15s;
+        }
+        .attachment-chip .chip-remove:hover {
+            color: #f87171;
+        }
+        .chip-spinner {
+            width: 0.8rem;
+            height: 0.8rem;
+            border: 2px solid #38bdf8;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Botón adjuntar archivo */
+        .btn-attach {
+            width: 2.8rem;
+            height: 2.8rem;
+            border-radius: 0.65rem;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 1.15rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .btn-attach:hover {
+            color: #f1f5f9;
+            background: #273549;
+            border-color: #475569;
+        }
+
 
         /* ── Header ──────────────────────────────────────────────────────── */
         header {
@@ -388,6 +520,13 @@
 <body>
 
 <div id="chat-container">
+    <!-- Drop Overlay para Drag & Drop de archivos -->
+    <div id="drop-overlay">
+        <span class="drop-icon">📥</span>
+        <span class="drop-title">Suelta tus archivos aquí</span>
+        <span class="drop-subtitle">PDF, Python, Markdown, C++, texto y código (hasta 50 MB)</span>
+    </div>
+
     <!-- Header -->
     <header>
         <div class="brand-group">
@@ -409,18 +548,26 @@
 
     <!-- Área de conversación -->
     <div id="history-messages" role="log" aria-live="polite" aria-label="Historial de conversación">
-        <p class="empty-hint">Escribe un mensaje o mantén presionado el micrófono para interactuar con Kelly.</p>
+        <p class="empty-hint">Escribe un mensaje, arrastra un archivo o mantén presionado el micrófono para interactuar con Kelly.</p>
     </div>
+
+    <!-- Barra de archivos adjuntos cargados -->
+    <div id="attachments-bar" class="attachments-bar"></div>
 
     <!-- Barra de entrada híbrida -->
     <footer>
+        <button id="attachBtn" class="btn-attach" type="button" aria-label="Adjuntar archivo" title="Adjuntar archivo (PDF, código, texto)">
+            📎
+        </button>
+        <input type="file" id="fileInput" multiple style="display: none;" accept=".pdf,.py,.md,.txt,.cpp,.c,.h,.hpp,.ts,.js,.java,.json,.yaml,.yml,.html,.css,.sql">
+
         <button id="recordBtn" aria-label="Mantén presionado para hablar" title="Mantén presionado para hablar">
             <span class="mic-icon">🎙️</span>
         </button>
 
         <textarea
             id="textInput"
-            placeholder="Escribe un mensaje... (Enter para enviar, Shift+Enter para salto de línea)"
+            placeholder="Escribe un mensaje o arrastra un archivo... (Enter para enviar, Shift+Enter para salto de línea)"
             rows="1"
             aria-label="Escribe tu mensaje"
         ></textarea>
@@ -430,6 +577,7 @@
         </button>
     </footer>
 </div>
+
 
 <script>
 // ─── Referencias DOM ──────────────────────────────────────────────────────────
@@ -444,6 +592,11 @@ const statusEl        = document.getElementById('status');
 const connDot         = document.getElementById('conn-dot');
 const historyMsgs     = document.getElementById('history-messages');
 const clearBtn        = document.getElementById('clearBtn');
+const chatContainer   = document.getElementById('chat-container');
+const dropOverlay     = document.getElementById('drop-overlay');
+const attachmentsBar  = document.getElementById('attachments-bar');
+const attachBtn       = document.getElementById('attachBtn');
+const fileInput       = document.getElementById('fileInput');
 
 // ─── Estado del Frontend ───────────────────────────────────────────────────────
 let voiceEnabled       = true;     // Toggle de voz (default: ON)
@@ -451,6 +604,126 @@ let mediaRecorder      = null;
 let audioChunks        = [];
 let isPlaying          = false;
 let ws                 = null;
+let attachedFiles      = [];       // [{ attachment_id, filename, size_bytes, preview, truncated, estimated_tokens }]
+
+// ─── Drag & Drop y Subida de Archivos ─────────────────────────────────────────
+attachBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+        handleFilesUpload(Array.from(fileInput.files));
+        fileInput.value = '';
+    }
+});
+
+let dragCounter = 0;
+chatContainer.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    dropOverlay.classList.add('active');
+});
+
+chatContainer.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+        dragCounter = 0;
+        dropOverlay.classList.remove('active');
+    }
+});
+
+chatContainer.addEventListener('dragover', (e) => {
+    e.preventDefault();
+});
+
+chatContainer.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    dropOverlay.classList.remove('active');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFilesUpload(Array.from(e.dataTransfer.files));
+    }
+});
+
+async function handleFilesUpload(files) {
+    for (const file of files) {
+        await uploadSingleFile(file);
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function getFileIcon(filename) {
+    const lower = filename.toLowerCase();
+    if (lower.endsWith('.pdf')) return '📄';
+    if (lower.endsWith('.py') || lower.endsWith('.js') || lower.endsWith('.ts') || lower.endsWith('.cpp') || lower.endsWith('.java')) return '💻';
+    if (lower.endsWith('.md') || lower.endsWith('.txt')) return '📝';
+    return '📎';
+}
+
+async function uploadSingleFile(file) {
+    const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip uploading';
+    chip.id = tempId;
+    chip.innerHTML = `
+        <span class="chip-spinner"></span>
+        <span class="chip-name">${escapeHtml(file.name)}</span>
+        <span class="chip-info">subiendo...</span>
+    `;
+    attachmentsBar.appendChild(chip);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const resp = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!resp.ok) {
+            let errText = 'Error en upload';
+            try {
+                const errJson = await resp.json();
+                errText = errJson.detail || errText;
+            } catch (_) {}
+            chip.remove();
+            addHistoryEntry(`❌ Error al subir ${file.name}: ${errText}`, 'system');
+            return;
+        }
+
+        const data = await resp.json();
+        attachedFiles.push(data);
+
+        chip.className = 'attachment-chip' + (data.truncated ? ' truncated' : '');
+        chip.id = 'chip-' + data.attachment_id;
+        chip.title = (data.preview || '') + (data.truncated ? '\n(Truncado al límite de tokens)' : '');
+        chip.innerHTML = `
+            <span>${getFileIcon(data.filename)}</span>
+            <span class="chip-name">${escapeHtml(data.filename)}</span>
+            <span class="chip-info">${data.truncated ? '⚠️ truncado' : `~${data.estimated_tokens} tok`}</span>
+            <button class="chip-remove" title="Quitar archivo" type="button">&times;</button>
+        `;
+        chip.querySelector('.chip-remove').onclick = () => {
+            attachedFiles = attachedFiles.filter(f => f.attachment_id !== data.attachment_id);
+            chip.remove();
+        };
+
+        if (data.truncated) {
+            addHistoryEntry(`⚠️ Archivo '${file.name}' excede el presupuesto y ha sido truncado a las primeras páginas/líneas (~${data.estimated_tokens} tokens).`, 'system');
+        }
+    } catch (err) {
+        console.error('[upload] Error subiendo archivo:', err);
+        chip.remove();
+        addHistoryEntry(`❌ Error de conexión al subir ${file.name}: ${err.message}`, 'system');
+    }
+}
+
 
 // Streaming y renderizado
 let currentAssistantElement = null;
@@ -812,13 +1085,20 @@ function sendTextMessage() {
 
     // Enviar payload JSON al backend
     const historyToSend = conversationHistory.slice(0, -1);
+    const attachmentIdsToSend = attachedFiles.map(f => f.attachment_id);
     ws.send(JSON.stringify({
         type: 'text_message',
         text: text,
+        attachment_ids: attachmentIdsToSend,
         history: historyToSend,
         voice_enabled: voiceEnabled,
     }));
+
+    // Limpiar archivos adjuntos tras el envío
+    attachedFiles = [];
+    attachmentsBar.innerHTML = '';
 }
+
 
 sendBtn.addEventListener('click', sendTextMessage);
 
@@ -953,19 +1233,24 @@ navigator.mediaDevices.getUserMedia({ audio: true, video: false })
             t_play_start = null; _fe_timing_logged = false;
 
             const historyToSend = conversationHistory.slice();
-            if (historyToSend.length > 0) {
+            const attachmentIdsToSend = attachedFiles.map(f => f.attachment_id);
+            if (historyToSend.length > 0 || attachmentIdsToSend.length > 0) {
                 ws.send(JSON.stringify({
                     type: 'audio_with_history',
                     history: historyToSend,
                     voice_enabled: voiceEnabled,
+                    attachment_ids: attachmentIdsToSend,
                 }));
             }
+            attachedFiles = [];
+            attachmentsBar.innerHTML = '';
 
             blob.arrayBuffer().then(buf => {
                 ws.send(buf);
                 t_send = performance.now();
             });
         };
+
 
         const startRecording = (e) => {
             e.preventDefault();
