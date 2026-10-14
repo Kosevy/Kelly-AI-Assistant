@@ -10,7 +10,9 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
-from pydantic import Field
+from typing import Any
+import json
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -83,7 +85,11 @@ class Settings(BaseSettings):
     # ─── LLM (Language Model) ─────────────────────────────────────────────
     llm_server_url: str = Field(
         default="http://127.0.0.1:8085/completion",
-        description="Endpoint URL of llama-server",
+        description="Endpoint URL of llama-server (legacy raw completions)",
+    )
+    llm_chat_url: str = Field(
+        default="http://127.0.0.1:8085/v1/chat/completions",
+        description="Endpoint URL of llama-server OpenAI-compatible chat completions with tools",
     )
     llm_temperature: float = Field(
         default=0.4, description="LLM sampling temperature (lower = more deterministic)"
@@ -168,6 +174,44 @@ class Settings(BaseSettings):
     debug_audio_max_files: int = Field(
         default=20, description="Maximum debug audio files retained"
     )
+
+    # ─── File Processing & Sandbox ─────────────────────────────────────────
+    allowed_paths: list[str] | str = Field(
+        default=["D:\\Git projects", "D:\\Ciclo 6"],
+        description="Directorios desde los cuales Kelly puede leer archivos (sandbox)",
+    )
+    max_file_tokens: int = Field(
+        default=5500,
+        description="Máximo de tokens a inyectar por archivo (estimación chars/4)",
+    )
+    max_upload_size_mb: int = Field(
+        default=50,
+        description="Tamaño máximo de archivo subido vía multipart (MB)",
+    )
+    upload_dir: str = Field(
+        default="data/uploads",
+        description="Directorio temporal para archivos subidos",
+    )
+    upload_ttl_minutes: int = Field(
+        default=60,
+        description="Tiempo de vida (TTL) de archivos subidos antes de ser eliminados (minutos)",
+    )
+
+    @field_validator("allowed_paths", mode="after")
+    @classmethod
+    def _parse_allowed_paths(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            v_str = v.strip()
+            if v_str.startswith("[") and v_str.endswith("]"):
+                import ast
+                try:
+                    res = ast.literal_eval(v_str)
+                    if isinstance(res, (list, tuple)):
+                        return [str(p) for p in res]
+                except Exception:
+                    pass
+            return [p.strip() for p in v_str.replace(";", ",").split(",") if p.strip()]
+        return list(v)
 
     def get_system_prompt_path(self) -> Path:
         return Path(self.llm_system_prompt_path)

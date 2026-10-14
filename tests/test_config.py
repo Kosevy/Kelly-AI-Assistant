@@ -95,6 +95,16 @@ class TestEnvOverrides:
             assert s.history_max_tokens_estimate == 16384
 
 
+    def test_default_file_processing_settings(self):
+        from app.config import Settings
+        s = Settings()
+        assert s.allowed_paths == ["D:\\Git projects", "D:\\Ciclo 6"]
+        assert s.max_file_tokens == 5500
+        assert s.max_upload_size_mb == 50
+        assert s.upload_dir == "data/uploads"
+        assert s.upload_ttl_minutes == 60
+
+
 class TestPathHelpers:
     def test_get_system_prompt_path(self):
         from app.config import Settings
@@ -112,3 +122,15 @@ class TestPathHelpers:
         path = s.get_voice_sample_path()
         assert isinstance(path, Path)
         assert path.suffix == ".wav"
+
+    def test_env_overrides_file_settings(self):
+        from app.config import Settings
+        with patch.dict(os.environ, {
+            "KELLY_ALLOWED_PATHS": r'["D:\\Custom", "D:\\Test"]',
+            "KELLY_MAX_FILE_TOKENS": "3000",
+            "KELLY_UPLOAD_TTL_MINUTES": "120",
+        }):
+            s = Settings()
+            assert s.allowed_paths == [r"D:\Custom", r"D:\Test"]
+            assert s.max_file_tokens == 3000
+            assert s.upload_ttl_minutes == 120
