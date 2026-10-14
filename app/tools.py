@@ -12,13 +12,14 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.calendar.tools import CALENDAR_TOOLS, execute_calendar_tool
 from app.config import settings
 from app.file_sandbox import resolve_safe_path
 from app.file_extractors import extract_by_extension
 from app.file_chunker import truncate_to_token_budget
 from app.logging_config import logger
 
-TOOLS: list[dict[str, Any]] = [
+FILE_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -60,6 +61,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+TOOLS: list[dict[str, Any]] = FILE_TOOLS + CALENDAR_TOOLS
 
 
 def _format_size(size_bytes: int) -> str:
@@ -154,5 +157,8 @@ async def execute_tool(
         except Exception as exc:
             logger.error(f"[tool:list_directory] Error listando '{safe_path}': {exc}")
             return f"Error al listar directorio '{safe_path}': {exc}"
+
+    elif name.startswith("calendar_"):
+        return await execute_calendar_tool(name, args)
 
     return f"Error: Herramienta desconocida '{name}'."

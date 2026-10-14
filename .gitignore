@@ -23,6 +23,9 @@ logs/
 # ─── Uploads & Data ──────────────────────────────────────────────────────────
 data/uploads/*
 !data/uploads/.gitkeep
+data/calendar.yaml
+data/calendar.yaml.tmp
+data/calendar_backups/
 
 # ─── Virtual Environments ──────────────────────────────────────────────────
 venv/
