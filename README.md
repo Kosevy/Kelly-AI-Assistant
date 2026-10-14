@@ -370,6 +370,66 @@ El backend utiliza el endpoint estándar de OpenAI `/v1/chat/completions` en `ll
 
 ---
 
+## Calendario Local con YAML y Tools
+
+Kelly cuenta con un sistema de calendario 100% local donde la fuente de verdad es un archivo YAML editable a mano (diseñado para actualizarse una vez por semestre académico).
+
+### 1. Formato YAML y Campos
+
+El archivo se organiza en cuatro secciones principales:
+- **`metadata`**: Datos globales del estudiante y semestre (`student_name`, `semester`, `semester_start`, `semester_end`, `exam_weeks` como semanas 8 para parciales y 15 para finales).
+- **`courses`**: Cursos matriculados con `id`, `name`, `difficulty` (escala 1 a 5), `sessions_per_week` y lista de `topics`.
+- **`recurring_blocks`**: Horarios fijos semanales (`class`, `transport`, `meal`, `exercise`, `study`, `other`) con días de la semana (`day_of_week`), hora de inicio (`start_time`), fin (`end_time`) y vigencia de fechas (`from_date`, `to_date`).
+- **`events`**: Hitos puntuales y evaluaciones (`exam`, `entregable`, `presentacion`, `practica`, `personal`) con `id`, `name`, `date`, `course_id`, `start_time`, `duration_minutes`, `weight`, `topics_covered` y `notes`.
+
+### 2. Cómo Usar el Template
+
+1. Copia el archivo de ejemplo para inicializar tu calendario:
+   ```powershell
+   Copy-Item data/calendar.yaml.example data/calendar.yaml
+   ```
+2. Abre `data/calendar.yaml` en tu editor de texto favorito y ajusta tus cursos, horarios de clase y fechas de exámenes del semestre.
+3. El archivo `data/calendar.yaml` se encuentra excluido de git por seguridad y privacidad de tus datos personales.
+
+### 3. Herramientas de Function Calling Expuestas
+
+Kelly dispone de 5 herramientas nativas para interactuar con tu calendario:
+- **`calendar_read_range(start_date, end_date, types)`**: Consulta los eventos y clases programadas en un rango de fechas. Permite responder preguntas como *¿qué tengo esta semana?* o *¿qué hay el 12 de mayo?*.
+- **`calendar_free_slots(start_date, end_date, min_block_minutes)`**: Calcula franjas horarias disponibles para estudio concentrado entre las 06:00 y las 23:00. **Ignora automáticamente bloques no bloqueantes** como transporte, comidas o ejercicio.
+- **`calendar_add_event(name, date, type, course_id, start_time, duration_minutes, ...)`**: Registra un nuevo evento o evaluación en el YAML generando un slug único e identificable.
+- **`calendar_list_courses()`**: Lista los cursos del ciclo con su dificultad, sesiones semanales y temas.
+- **`calendar_delete_event(event_id)`**: Elimina un evento puntual del calendario a petición explícita del usuario.
+
+### 4. Backup Automático y Escritura Atómica
+
+- **Respaldo rotativo previo:** Antes de que Kelly modifique el archivo `calendar.yaml`, se genera automáticamente una copia de seguridad en `data/calendar_backups/calendar_{YYYYMMDD_HHMMSS}.yaml`.
+- **Rotación:** Se conservan únicamente las últimas N versiones (configurable mediante `KELLY_CALENDAR_BACKUP_COUNT=10`).
+- **Escritura atómica:** Para evitar corrupción del YAML si el proceso se interrumpe durante el guardado, los datos se vuelcan primero a un archivo temporal `calendar.yaml.tmp` y luego se reemplazan de forma atómica mediante `os.replace()`.
+
+### 5. Ejemplos de Conversación
+
+- **Consulta semanal:**
+  > *Usuario:* "¿Qué tengo esta semana?"
+  > *Kelly:* Invoca `calendar_read_range` con las fechas de lunes a domingo de la semana en curso y resume tus clases y entregas.
+
+- **Próximo examen o deadline:**
+  > *Usuario:* "¿Cuándo es mi próximo examen?"
+  > *Kelly:* Consulta las evaluaciones programadas y te informa fecha, hora y curso de la evaluación más cercana.
+
+- **Añadir un evento:**
+  > *Usuario:* "Kelly, añade una práctica de Cálculo el 20 de abril a las 8am."
+  > *Kelly:* Invoca `calendar_add_event(name='Práctica de Cálculo', date='2026-04-20', type='practica', course_id='calc3', start_time='08:00')` y confirma la adición indicando el ID asignado.
+
+- **Disponibilidad para estudio:**
+  > *Usuario:* "¿Tengo 90 minutos libres el miércoles?"
+  > *Kelly:* Invoca `calendar_free_slots` con `min_block_minutes=90` para la fecha solicitada y te muestra los intervalos en los que puedes concentrarte.
+
+- **Revisión de cursos:**
+  > *Usuario:* "¿Cuáles son mis cursos de este ciclo y qué dificultad tienen?"
+  > *Kelly:* Invoca `calendar_list_courses` y presenta la lista ordenada con sus temas y nivel de dificultad.
+
+---
+
 ## Model Licenses & Attributions
 
 | Component     | Model / Engine                  | License                                                                      |
