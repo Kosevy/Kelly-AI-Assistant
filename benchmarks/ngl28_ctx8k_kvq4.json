@@ -1,0 +1,31 @@
+{
+  "label": "ngl28_ctx8k_kvq4",
+  "runs": 3,
+  "avg_ttft_ms": 79.9,
+  "avg_total_ms": 1003.4,
+  "avg_tokens": 44.7,
+  "avg_toks_per_sec": 46.11,
+  "runs_detail": [
+    {
+      "label": "ngl28_ctx8k_kvq4",
+      "ttft_ms": 158.0,
+      "total_ms": 512.6,
+      "tokens": 16,
+      "toks_per_sec": 42.3
+    },
+    {
+      "label": "ngl28_ctx8k_kvq4",
+      "ttft_ms": 50.9,
+      "total_ms": 1258.8,
+      "tokens": 59,
+      "toks_per_sec": 48.02
+    },
+    {
+      "label": "ngl28_ctx8k_kvq4",
+      "ttft_ms": 30.7,
+      "total_ms": 1238.8,
+      "tokens": 59,
+      "toks_per_sec": 48.01
+    }
+  ]
+}

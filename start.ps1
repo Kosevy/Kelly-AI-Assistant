@@ -48,15 +48,17 @@ if (Test-Path $llamaExe) {
     Write-Host "[->] Lanzando llama-server (puerto 8085)..." -ForegroundColor Yellow
 
     # Ryzen 5 7600X: 6 nucleos fisicos. Reservamos 1 para SO + STT = --threads 5.
-    # -ngl 24: offload de 24 capas a GPU en RTX 3060 12GB (~30-50 tok/s). Si hay OOM, bajar a 20.
-    # -np 1: 1 slot de contexto para monousuario (evita reservar 4x memoria).
-    # -c 16384: contexto de 16k tokens para documentos y conversaciones extensas.
-    # -ctk q8_0 -ctv q8_0: cuantizacion del KV cache a 8-bit para ahorrar ~50% VRAM de contexto.
+    # -ngl 28: offload total de las 28 capas a GPU en RTX 3060 12GB (~46-48 tok/s sin capas en CPU).
+    # -np 1: 1 slot de contexto para monousuario (evita reservar slots paralelos redundantes).
+    # -c 8192: contexto balanceado de 8k tokens para lectura de documentos y multiturno amplio.
+    # -ctk q8_0 -ctv q8_0: KV cache a 8-bit. q4_0 fue probado pero degrada severamente
+    # la calidad del output en Qwen2.5-7B (tokens incoherentes, fugas de idioma).
+    # El ahorro de q4_0 (~115 MiB en 8k contexto) no justifica la degradacion.
     $llamaArgs = "-m `"$modelPath`" --host 127.0.0.1 --port 8085 " +
                  "--threads 5 --threads-batch 5 " +
-                 "-ngl 24 " +
+                 "-ngl 28 " +
                  "-np 1 " +
-                 "-c 16384 " +
+                 "-c 8192 " +
                  "-ctk q8_0 -ctv q8_0"
 
     Start-Process -FilePath "cmd.exe" `
@@ -64,7 +66,7 @@ if (Test-Path $llamaExe) {
         -WorkingDirectory $ProjectRoot `
         -WindowStyle Normal
 
-    Write-Host "[INFO] llama-server: threads=5 | ngl=24 | np=1 | ctx=16384 | kv=q8_0" -ForegroundColor Green
+    Write-Host "[INFO] llama-server: threads=5 | ngl=28 | np=1 | ctx=8192 | kv=q8_0" -ForegroundColor Green
     Write-Host "[OK] llama-server lanzado" -ForegroundColor Green
     Write-Host "[...] Esperando 5s para que el modelo cargue..." -ForegroundColor Gray
     Start-Sleep -Seconds 5
