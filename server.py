@@ -85,6 +85,7 @@ from app.stt_prompt import build_initial_prompt
 from app.system_prompt import build_system_prompt
 from app.protocol import parse_history_payload, parse_text_message_payload, parse_attachment_ids_payload
 from app.tools import TOOLS
+from app.calendar import init_calendar_if_missing
 from app.llm_client import stream_chat_with_tools, format_chat_messages
 from app.file_extractors import extract_by_extension
 from app.file_chunker import truncate_to_token_budget, estimate_tokens
@@ -206,8 +207,10 @@ async def _cleanup_uploads_loop() -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """
-    FastAPI lifespan handler: runs _warmup_llm() and launches attachment TTL cleanup.
+    FastAPI lifespan handler: initializes calendar from template if missing,
+    runs _warmup_llm(), and launches attachment TTL cleanup.
     """
+    init_calendar_if_missing()
     await _warmup_llm()
     cleanup_task = asyncio.create_task(_cleanup_uploads_loop(), name="upload_cleanup")
     try:

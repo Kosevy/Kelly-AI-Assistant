@@ -274,3 +274,28 @@ def save_calendar(
                 pass
         logger.error(f"[calendar:parser] Fallo en la escritura de '{path}': {exc}")
         raise CalendarValidationError(f"Fallo durante la persistencia atómica del calendario: {exc}")
+
+
+def init_calendar_if_missing(
+    calendar_path: Path | None = None,
+    template_path: Path | None = None,
+) -> bool:
+    """
+    Inicializa el archivo de calendario copiando el template si no existe aún en disco.
+    Registra en log INFO: '[calendar] Calendario inicializado desde template'.
+    Retorna True si fue inicializado desde template, False si ya existía.
+    """
+    cal_path = calendar_path or settings.get_calendar_path()
+    tpl_path = template_path or Path("data/calendar.yaml.example")
+
+    if not cal_path.exists():
+        if tpl_path.exists():
+            cal_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tpl_path, cal_path)
+            logger.info("[calendar] Calendario inicializado desde template")
+            return True
+        else:
+            logger.warning(f"[calendar] Template '{tpl_path}' no encontrado para inicializar '{cal_path}'")
+            return False
+
+    return False

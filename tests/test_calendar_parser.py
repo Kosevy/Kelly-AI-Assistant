@@ -20,6 +20,7 @@ from app.calendar import (
     EventType,
     Metadata,
     RecurringBlock,
+    init_calendar_if_missing,
     load_calendar,
     save_calendar,
     validate_calendar,
@@ -299,3 +300,43 @@ def test_atomic_write_does_not_corrupt_on_failure(tmp_path: Path, sample_valid_c
     assert cal_file.read_text(encoding="utf-8") == original_content
     # El archivo temporal no debe haber quedado abandonado
     assert not (tmp_path / "calendar.yaml.tmp").exists()
+
+
+def test_init_calendar_if_missing_copies_template(tmp_path: Path):
+    """Si calendar.yaml no existe, init_calendar_if_missing lo crea copiando el template."""
+    target_cal = tmp_path / "data" / "calendar.yaml"
+    template_cal = tmp_path / "data" / "calendar.yaml.example"
+    template_cal.parent.mkdir(parents=True, exist_ok=True)
+    template_cal.write_text("metadata:\n  student_name: 'Test'\n  semester: '2026-1'\n  semester_start: 2026-03-15\n  semester_end: 2026-07-20\n  exam_weeks: {}\n", encoding="utf-8")
+
+    assert not target_cal.exists()
+    created = init_calendar_if_missing(calendar_path=target_cal, template_path=template_cal)
+    assert created is True
+    assert target_cal.exists()
+    assert target_cal.read_text(encoding="utf-8") == template_cal.read_text(encoding="utf-8")
+
+    # Si se vuelve a llamar, no hace nada y retorna False
+    second_call = init_calendar_if_missing(calendar_path=target_cal, template_path=template_cal)
+    assert second_call is False
+
+
+def test_init_calendar_if_missing_preserves_existing(tmp_path: Path):
+    """Si calendar.yaml ya existe con datos del usuario, no se sobreescribe."""
+    target_cal = tmp_path / "calendar.yaml"
+    template_cal = tmp_path / "calendar.yaml.example"
+    template_cal.write_text("TEMPLATE CONTENT", encoding="utf-8")
+    target_cal.write_text("USER EDITED CONTENT", encoding="utf-8")
+
+    result = init_calendar_if_missing(calendar_path=target_cal, template_path=template_cal)
+    assert result is False
+    assert target_cal.read_text(encoding="utf-8") == "USER EDITED CONTENT"
+
+
+def test_init_calendar_if_missing_handles_missing_template(tmp_path: Path):
+    """Si el template de ejemplo tampoco existe, no arroja excepción no controlada."""
+    target_cal = tmp_path / "calendar.yaml"
+    missing_template = tmp_path / "nonexistent.yaml.example"
+
+    result = init_calendar_if_missing(calendar_path=target_cal, template_path=missing_template)
+    assert result is False
+    assert not target_cal.exists()

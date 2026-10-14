@@ -17,7 +17,7 @@ from unidecode import unidecode
 from app.calendar.exceptions import CalendarValidationError
 from app.calendar.expander import expand_all
 from app.calendar.models import Calendar, Event, EventType
-from app.calendar.parser import load_calendar, save_calendar
+from app.calendar.parser import init_calendar_if_missing, load_calendar, save_calendar
 from app.calendar.query import events_in_range, free_slots
 from app.config import settings
 from app.logging_config import logger
@@ -155,6 +155,9 @@ async def execute_calendar_tool(
     Retorna un string formateado para el contexto del LLM.
     """
     target_path = calendar_path or settings.get_calendar_path()
+
+    if not target_path.exists():
+        init_calendar_if_missing(calendar_path=target_path)
 
     if not target_path.exists():
         logger.warning(f"[calendar_tool] Archivo de calendario no encontrado en: {target_path}")

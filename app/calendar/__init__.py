@@ -18,7 +18,12 @@ from app.calendar.models import (
     Metadata,
     RecurringBlock,
 )
-from app.calendar.parser import load_calendar, save_calendar, validate_calendar
+from app.calendar.parser import (
+    init_calendar_if_missing,
+    load_calendar,
+    save_calendar,
+    validate_calendar,
+)
 from app.calendar.query import events_in_range, free_slots, next_deadline
 
 __all__ = [
@@ -38,6 +43,7 @@ __all__ = [
     "expand_events",
     "expand_recurring_blocks",
     "free_slots",
+    "init_calendar_if_missing",
     "load_calendar",
     "next_deadline",
     "save_calendar",
