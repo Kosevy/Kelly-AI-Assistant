@@ -51,23 +51,36 @@ class TestParseTextMessagePayload:
             "text": "  Explícame qué es un puntero en C++  ",
             "history": [{"role": "user", "content": "Hola"}],
             "voice_enabled": False,
+            "attachment_ids": ["uuid-123", "uuid-456"],
         }
-        text, history, voice_enabled = parse_text_message_payload(msg)
+        text, history, voice_enabled, attachment_ids = parse_text_message_payload(msg)
         assert text == "Explícame qué es un puntero en C++"
         assert len(history) == 1
         assert voice_enabled is False
+        assert attachment_ids == ["uuid-123", "uuid-456"]
 
     def test_default_voice_enabled_is_false(self):
         msg = {"type": "text_message", "text": "Hola"}
-        text, history, voice_enabled = parse_text_message_payload(msg)
+        text, history, voice_enabled, attachment_ids = parse_text_message_payload(msg)
         assert text == "Hola"
         assert history == []
         assert voice_enabled is False
+        assert attachment_ids == []
 
     def test_voice_enabled_true(self):
         msg = {"type": "text_message", "text": "Hola", "voice_enabled": True}
-        text, history, voice_enabled = parse_text_message_payload(msg)
+        text, history, voice_enabled, attachment_ids = parse_text_message_payload(msg)
         assert voice_enabled is True
+        assert attachment_ids == []
+
+    def test_attachment_ids_sanitization(self):
+        msg = {
+            "type": "text_message",
+            "text": "Hola",
+            "attachment_ids": ["uuid-1", 1234, "", "  ", "uuid-2", None],
+        }
+        _, _, _, attachment_ids = parse_text_message_payload(msg)
+        assert attachment_ids == ["uuid-1", "uuid-2"]
 
     def test_empty_or_whitespace_text_raises_value_error(self):
         with pytest.raises(ValueError):

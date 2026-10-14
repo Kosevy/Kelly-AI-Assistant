@@ -20,6 +20,10 @@ debug/
 logs/
 *.log
 
+# ─── Uploads & Data ──────────────────────────────────────────────────────────
+data/uploads/*
+!data/uploads/.gitkeep
+
 # ─── Virtual Environments ──────────────────────────────────────────────────
 venv/
 .venv/
