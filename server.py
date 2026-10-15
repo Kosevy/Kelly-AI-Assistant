@@ -327,10 +327,8 @@ def _build_prompt_with_history(
     """
     Build ChatML prompt for Qwen2.5 with conversational history (legacy fallback).
     """
-    fecha_hora = datetime.now().strftime("%A, %d de %B de %Y. La hora es %I:%M %p")
     system_prompt = build_system_prompt(
         _system_prompt_template,
-        current_datetime=fecha_hora,
         input_mode=input_mode,
     )
     working_history = _prepare_history(history, system_prompt, user_text)
@@ -839,10 +837,8 @@ async def _run_llm_and_tts(
     if t_start is None:
         t_start = time.perf_counter()
 
-    fecha_hora = datetime.now().strftime("%A, %d de %B de %Y. La hora es %I:%M %p")
     system_prompt = build_system_prompt(
         _system_prompt_template,
-        current_datetime=fecha_hora,
         input_mode=input_mode,
     )
     working_history = _prepare_history(history, system_prompt, user_text)

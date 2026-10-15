@@ -52,3 +52,62 @@ class TestBuildSystemPrompt:
         assert "Eres Kelly. Hoy es 2026-10-10." in result
         assert "Modo de interacción actual:" in result
         assert "Voz" in result
+
+
+class TestDatetimeContext:
+    def test_datetime_context_includes_resolved_ranges(self):
+        from datetime import datetime
+        from app.system_prompt import build_datetime_context
+
+        fixed_dt = datetime(2026, 10, 15, 14, 30)
+        ctx = build_datetime_context(now=fixed_dt)
+        assert "Rangos resueltos:" in ctx
+        assert '"esta semana"' in ctx
+        assert '"próxima semana"' in ctx
+        assert '"este mes"' in ctx
+        assert "2026-10-12" in ctx  # start of this week
+        assert "2026-10-18" in ctx  # end of this week
+        assert "2026-10-19" in ctx  # start of next week
+        assert "2026-10-25" in ctx  # end of next week
+        assert "2026-10-01 a 2026-10-31" in ctx  # this month
+
+    def test_datetime_context_uses_spanish_day_names(self):
+        from datetime import datetime
+        from app.system_prompt import build_datetime_context
+
+        fixed_dt = datetime(2026, 10, 15, 10, 0)
+        ctx = build_datetime_context(now=fixed_dt)
+        assert "jueves" in ctx.lower()
+        assert "octubre" in ctx.lower()
+        for english_day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+            assert english_day not in ctx
+
+    def test_next_week_starts_on_monday(self):
+        from datetime import datetime
+        from app.system_prompt import build_datetime_context
+
+        # 2026-10-15 is Thursday
+        fixed_dt = datetime(2026, 10, 15, 9, 0)
+        ctx = build_datetime_context(now=fixed_dt)
+        assert '"próxima semana" = 2026-10-19 (lunes) a 2026-10-25 (domingo)' in ctx
+
+    def test_this_week_includes_today(self):
+        from datetime import datetime
+        from app.system_prompt import build_datetime_context
+
+        # 2026-10-15 is Thursday
+        fixed_dt = datetime(2026, 10, 15, 12, 0)
+        ctx = build_datetime_context(now=fixed_dt)
+        assert '"esta semana" = 2026-10-12 (lunes) a 2026-10-18 (domingo)' in ctx
+        assert "Hoy: 2026-10-15 (jueves)" in ctx
+
+    def test_default_build_system_prompt_injects_dynamic_context(self):
+        from datetime import datetime
+        from app.system_prompt import build_system_prompt
+
+        template = "Prompt:\n{current_datetime}"
+        fixed_dt = datetime(2026, 10, 15, 12, 0)
+        res = build_system_prompt(template, now=fixed_dt)
+        assert "Contexto temporal:" in res
+        assert "2026-10-15" in res
+        assert "{current_datetime}" not in res

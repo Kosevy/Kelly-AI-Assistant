@@ -28,9 +28,10 @@ CALENDAR_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "calendar_read_range",
             "description": (
-                "Lee los eventos y bloques del calendario en un rango de fechas. "
-                "Útil para responder '¿qué tengo esta semana?', "
-                "'¿qué hay el 12 de mayo?', etc."
+                "Muestra los eventos y bloques en un rango de fechas. "
+                "USAR CUANDO: el usuario quiere ver el horario completo o preguntar "
+                "qué eventos hay en un rango. NO usar para calcular tiempo libre. "
+                "Ej: '¿qué tengo esta semana?', '¿qué hay el 12 de mayo?'."
             ),
             "parameters": {
                 "type": "object",
@@ -52,9 +53,11 @@ CALENDAR_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "calendar_free_slots",
             "description": (
-                "Calcula bloques de tiempo libre en un rango de fechas. "
-                "Útil para '¿tengo tiempo para estudiar mañana?', "
-                "'¿cuándo puedo hacer 90 min seguidos?'"
+                "Calcula bloques de tiempo LIBRE disponibles. "
+                "USAR CUANDO: el usuario pregunta si tiene tiempo disponible para algo, "
+                "o quiere saber huecos sin compromisos. "
+                "NO usar para ver el horario completo. "
+                "Ej: '¿tengo tiempo para estudiar?', '¿cuándo puedo hacer 90 min?'."
             ),
             "parameters": {
                 "type": "object",
