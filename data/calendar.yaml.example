@@ -16,7 +16,7 @@ metadata:
     finales: 15
 
 courses:
-  - id: "calc3"
+  - id: "calc3"              # ID corto sin espacios, referenciado por blocks y events
     name: "Cálculo III"
     difficulty: 4          # 1-5, autoevaluación de dificultad
     sessions_per_week: 2
@@ -37,7 +37,9 @@ courses:
 recurring_blocks:
   - name: "Cálculo III - Teoría"
     course_id: "calc3"
-    type: "class"          # class, transport, meal, exercise, study, other
+    # type: uno de [class, transport, meal, exercise, study, other]
+    # aliases aceptados: personal→meal, commute→transport, transportation→transport
+    type: "class"
     day_of_week: ["monday", "wednesday"]
     start_time: "08:00"
     end_time: "10:00"
@@ -45,6 +47,7 @@ recurring_blocks:
     to_date: 2026-07-15
 
   - name: "Transporte ida"
+    # type: 'transport' (también aceptado: 'commute', 'transportation')
     type: "transport"
     day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
     start_time: "07:00"
@@ -53,6 +56,7 @@ recurring_blocks:
     to_date: 2026-07-15
 
   - name: "Almuerzo"
+    # type: 'meal' (también aceptado: 'personal')
     type: "meal"
     day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
     start_time: "13:00"
@@ -63,12 +67,15 @@ recurring_blocks:
 events:
   - id: "parcial_calc3"
     name: "Parcial Cálculo III"
-    type: "exam"           # exam, entregable, presentacion, practica, personal
+    # type: uno de [exam, entregable, presentacion, practica, personal]
+    # aliases aceptados: assignment→entregable, task→entregable, deliverable→entregable,
+    #                    project→entregable, homework→entregable
+    type: "exam"
     course_id: "calc3"
     date: 2026-05-12
     start_time: "10:00"
     duration_minutes: 120
-    weight: 0.30           # opcional, peso en la nota final
+    weight: 0.30           # opcional, peso en la nota final (0.0-1.0)
     topics_covered:
       - "Series"
       - "Integrales múltiples"
@@ -76,6 +83,7 @@ events:
 
   - id: "entrega_bd_1"
     name: "Entrega Proyecto BD - Avance 1"
+    # type: 'entregable' (también aceptado: 'assignment', 'task', 'deliverable', 'project', 'homework')
     type: "entregable"
     course_id: "bd"
     date: 2026-04-05

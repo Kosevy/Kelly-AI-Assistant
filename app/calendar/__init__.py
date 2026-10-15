@@ -1,7 +1,7 @@
 """
 app/calendar — Sistema de calendario local de Kelly.
 """
-from app.calendar.exceptions import CalendarError, CalendarValidationError
+from app.calendar.exceptions import CalendarError, CalendarValidationError, ValidationIssue
 from app.calendar.expander import (
     ExpandedBlock,
     expand_all,
@@ -19,6 +19,7 @@ from app.calendar.models import (
     RecurringBlock,
 )
 from app.calendar.parser import (
+    check_calendar_health,
     init_calendar_if_missing,
     load_calendar,
     save_calendar,
@@ -31,6 +32,7 @@ __all__ = [
     "Calendar",
     "CalendarError",
     "CalendarValidationError",
+    "ValidationIssue",
     "Course",
     "DayOfWeek",
     "Event",
@@ -38,6 +40,7 @@ __all__ = [
     "ExpandedBlock",
     "Metadata",
     "RecurringBlock",
+    "check_calendar_health",
     "events_in_range",
     "expand_all",
     "expand_events",

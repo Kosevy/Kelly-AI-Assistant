@@ -214,6 +214,25 @@ class Settings(BaseSettings):
         default=["class", "study", "exam", "entregable", "presentacion", "practica"],
         description="Tipos de eventos o bloques considerados ocupados para cálculo de tiempo libre",
     )
+    calendar_type_aliases: dict[str, str] = Field(
+        default={
+            # Aliases para BlockType (bloques recurrentes)
+            "personal": "meal",           # 'personal' es ambiguo; default→meal (sobreescribir en .env si se prefiere exercise)
+            "commute": "transport",
+            "transportation": "transport",
+            # Aliases para EventType (eventos puntuales)
+            "assignment": "entregable",
+            "task": "entregable",
+            "deliverable": "entregable",
+            "project": "entregable",
+            "homework": "entregable",
+        },
+        description=(
+            "Aliases aceptados en campos 'type' del calendario. "
+            "La tabla es explícita y testeable; no es inferencia automática. "
+            "Sobreescribir en .env con KELLY_CALENDAR_TYPE_ALIASES='{\"personal\": \"exercise\"}'."
+        ),
+    )
 
     @field_validator("allowed_paths", "free_slots_busy_types", mode="after")
     @classmethod

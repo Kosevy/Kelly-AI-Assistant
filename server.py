@@ -85,7 +85,7 @@ from app.stt_prompt import build_initial_prompt
 from app.system_prompt import build_system_prompt
 from app.protocol import parse_history_payload, parse_text_message_payload, parse_attachment_ids_payload
 from app.tools import TOOLS
-from app.calendar import init_calendar_if_missing
+from app.calendar import init_calendar_if_missing, check_calendar_health
 from app.llm_client import stream_chat_with_tools, format_chat_messages
 from app.file_extractors import extract_by_extension
 from app.file_chunker import truncate_to_token_budget, estimate_tokens
@@ -172,6 +172,11 @@ from contextlib import asynccontextmanager
 # In-memory storage for uploaded file attachments: {attachment_id: metadata_and_text}
 UPLOADED_ATTACHMENTS: dict[str, dict[str, Any]] = {}
 
+# Estado del calendario evaluado al arrancar y disponible para /health.
+# Rationale: la validación puede ser costosa (I/O + Pydantic); se ejecuta
+# una sola vez en lifespan y su resultado se cachea aquí.
+_calendar_health: dict[str, Any] = {"status": "unknown", "errors": [], "path": str(settings.get_calendar_path())}
+
 
 async def _cleanup_uploads_loop() -> None:
     """
@@ -207,10 +212,17 @@ async def _cleanup_uploads_loop() -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """
-    FastAPI lifespan handler: initializes calendar from template if missing,
-    runs _warmup_llm(), and launches attachment TTL cleanup.
+    FastAPI lifespan handler:
+    1. Inicializa el calendario desde template si no existe.
+    2. Valida el calendario al arrancar y cachea el resultado en _calendar_health.
+       Si hay errores, los loguea pero NO detiene el servidor.
+    3. Calienta el LLM (KV cache).
+    4. Lanza la tarea de limpieza de uploads.
     """
+    global _calendar_health
     init_calendar_if_missing()
+    _calendar_health = check_calendar_health(settings.get_calendar_path())
+
     await _warmup_llm()
     cleanup_task = asyncio.create_task(_cleanup_uploads_loop(), name="upload_cleanup")
     try:
@@ -1128,8 +1140,11 @@ async def get_manifest():
 @app.get("/health")
 async def health_check():
     """
-    Returns status of all components: STT, LLM, TTS.
+    Returns status of all components: STT, LLM, TTS, Calendar.
     200 OK if all healthy, 503 if any component is degraded.
+
+    Calendar status is pre-computed at startup (see _lifespan) to avoid
+    re-reading the YAML file on every health poll.
     """
     components: dict[str, Any] = {}
     all_ok = True
@@ -1171,11 +1186,17 @@ async def health_check():
         components["tts"] = {"status": "error", "detail": str(e)}
         all_ok = False
 
+    # Estado del calendario — cacheado desde lifespan; no re-valida en cada poll
+    components["calendar"] = dict(_calendar_health)
+    if _calendar_health.get("status") == "error":
+        all_ok = False
+
     status_code = 200 if all_ok else 503
     return JSONResponse(
         content={"status": "ok" if all_ok else "degraded", "components": components},
         status_code=status_code,
     )
+
 
 
 @app.post("/api/upload")

@@ -3,6 +3,11 @@ app/calendar/models.py — Modelos Pydantic para el sistema de calendario local 
 
 Rationale:
 - Define la fuente de verdad tipada para calendarios académicos y personales.
+- Aplica aliases explícitos y declarados para normalizar variantes comunes del
+  campo 'type' antes de validar el enum canónico. Los aliases viven en config.py
+  para que sean visibles, testeables y sobreescribibles vía .env.
+- Usa extra="ignore" para tolerar campos desconocidos en el YAML sin romper
+  la carga; el parser emite un warning por campo ignorado.
 - Aplica validaciones de integridad referencial (course_id) y coherencia temporal
   (fechas, horarios y unicidad de identificadores) en tiempo de carga/creación.
 """
@@ -11,7 +16,8 @@ from __future__ import annotations
 from datetime import date, time
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field, model_validator
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class BlockType(str, Enum):
@@ -44,8 +50,89 @@ class DayOfWeek(str, Enum):
     SUNDAY = "sunday"
 
 
+def _resolve_block_type(raw: Any) -> BlockType:
+    """
+    Normaliza el valor de 'type' de un RecurringBlock aplicando aliases declarados.
+
+    Rationale: el usuario puede escribir variantes comunes (personal, commute) que
+    se normalizan a los valores canónicos ANTES de validar el enum. La tabla de
+    aliases es explícita en config.py, no inferencia automática.
+
+    Lanza ValueError con mensaje descriptivo si el valor no se reconoce en
+    ninguna de las dos tablas (canónica + aliases).
+    """
+    if isinstance(raw, BlockType):
+        return raw
+
+    # Import tardío para evitar ciclo: models → config → models
+    from app.config import settings  # noqa: PLC0415
+
+    raw_str = (raw.value if isinstance(raw, Enum) else str(raw)).strip().lower()
+
+    # 1. Intentar directamente en el enum canónico
+    try:
+        return BlockType(raw_str)
+    except ValueError:
+        pass
+
+    # 2. Buscar en la tabla de aliases
+    aliases: dict[str, str] = settings.calendar_type_aliases
+    if raw_str in aliases:
+        canonical = aliases[raw_str]
+        try:
+            return BlockType(canonical)
+        except ValueError:
+            pass  # alias mal configurado; caerá al error final
+
+    # 3. Construir mensaje de error descriptivo con valores válidos y aliases
+    valid = ", ".join(bt.value for bt in BlockType)
+    alias_hints = ", ".join(f"{k}→{v}" for k, v in aliases.items() if v in [bt.value for bt in BlockType])
+    raise ValueError(
+        f"type='{raw}' no válido para bloques recurrentes. "
+        f"Valores permitidos: {valid}. "
+        f"Aliases aceptados: {alias_hints}."
+    )
+
+
+def _resolve_event_type(raw: Any) -> EventType:
+    """
+    Normaliza el valor de 'type' de un Event aplicando aliases declarados.
+
+    Misma estrategia que _resolve_block_type pero para EventType.
+    """
+    if isinstance(raw, EventType):
+        return raw
+
+    from app.config import settings  # noqa: PLC0415
+
+    raw_str = (raw.value if isinstance(raw, Enum) else str(raw)).strip().lower()
+
+    try:
+        return EventType(raw_str)
+    except ValueError:
+        pass
+
+    aliases: dict[str, str] = settings.calendar_type_aliases
+    if raw_str in aliases:
+        canonical = aliases[raw_str]
+        try:
+            return EventType(canonical)
+        except ValueError:
+            pass
+
+    valid = ", ".join(et.value for et in EventType)
+    alias_hints = ", ".join(f"{k}→{v}" for k, v in aliases.items() if v in [et.value for et in EventType])
+    raise ValueError(
+        f"type='{raw}' no válido para eventos. "
+        f"Valores permitidos: {valid}. "
+        f"Aliases aceptados: {alias_hints}."
+    )
+
+
 class Metadata(BaseModel):
     """Metadatos globales del semestre académico."""
+    model_config = ConfigDict(extra="ignore")
+
     student_name: str
     semester: str
     semester_start: date
@@ -63,6 +150,8 @@ class Metadata(BaseModel):
 
 class Course(BaseModel):
     """Representación de un curso matriculado en el semestre."""
+    model_config = ConfigDict(extra="ignore")
+
     id: str
     name: str
     difficulty: int = Field(ge=1, le=5)
@@ -72,6 +161,8 @@ class Course(BaseModel):
 
 class RecurringBlock(BaseModel):
     """Bloque con recurrencia semanal fija (clases, transporte, comidas)."""
+    model_config = ConfigDict(extra="ignore")
+
     name: str
     course_id: str | None = None
     type: BlockType
@@ -80,6 +171,12 @@ class RecurringBlock(BaseModel):
     end_time: time
     from_date: date
     to_date: date
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalize_type(cls, v: Any) -> BlockType:
+        """Aplica aliases y normalización antes de validar el enum BlockType."""
+        return _resolve_block_type(v)
 
     @model_validator(mode="after")
     def _validate_block_coherence(self) -> RecurringBlock:
@@ -96,6 +193,8 @@ class RecurringBlock(BaseModel):
 
 class Event(BaseModel):
     """Evento puntual, hito académico o personal con fecha específica."""
+    model_config = ConfigDict(extra="ignore")
+
     id: str
     name: str
     type: EventType
@@ -107,6 +206,12 @@ class Event(BaseModel):
     topics_covered: list[str] = Field(default_factory=list)
     estimated_hours: int | None = None
     notes: str | None = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalize_type(cls, v: Any) -> EventType:
+        """Aplica aliases y normalización antes de validar el enum EventType."""
+        return _resolve_event_type(v)
 
     @model_validator(mode="after")
     def _validate_event_coherence(self) -> Event:
@@ -123,34 +228,9 @@ class Event(BaseModel):
 
 class Calendar(BaseModel):
     """Estructura raíz del calendario local (fuente de verdad YAML)."""
+    model_config = ConfigDict(extra="ignore")
+
     metadata: Metadata
     courses: list[Course] = Field(default_factory=list)
     recurring_blocks: list[RecurringBlock] = Field(default_factory=list)
     events: list[Event] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_calendar_integrity(self) -> Calendar:
-        course_ids = {c.id for c in self.courses}
-
-        # Validar pertenencia de course_id en bloques recurrentes
-        for block in self.recurring_blocks:
-            if block.course_id and block.course_id not in course_ids:
-                raise ValueError(
-                    f"Bloque '{block.name}' referencia course_id inexistente: '{block.course_id}'"
-                )
-
-        # Validar pertenencia de course_id en eventos
-        for ev in self.events:
-            if ev.course_id and ev.course_id not in course_ids:
-                raise ValueError(
-                    f"Evento '{ev.id}' referencia course_id inexistente: '{ev.course_id}'"
-                )
-
-        # Validar identificadores únicos en eventos
-        seen_event_ids: set[str] = set()
-        for ev in self.events:
-            if ev.id in seen_event_ids:
-                raise ValueError(f"ID de evento duplicado en el calendario: '{ev.id}'")
-            seen_event_ids.add(ev.id)
-
-        return self
