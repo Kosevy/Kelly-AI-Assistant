@@ -86,6 +86,8 @@ from app.system_prompt import build_system_prompt
 from app.protocol import parse_history_payload, parse_text_message_payload, parse_attachment_ids_payload
 from app.tools import TOOLS
 from app.calendar import init_calendar_if_missing, check_calendar_health
+from app.calendar.intent_router import detect_calendar_intent
+from app.calendar.tools import execute_calendar_tool
 from app.llm_client import stream_chat_with_tools, format_chat_messages
 from app.file_extractors import extract_by_extension
 from app.file_chunker import truncate_to_token_budget, estimate_tokens
@@ -274,9 +276,30 @@ def _prepare_history(
     Truncates history by turn count (max history_max_turns) and by estimated
     token count (max history_max_tokens_estimate, using len/4 heuristic).
     Drops oldest user+assistant pairs first.
+
+    Sanea turnos previos de calendario: si un mensaje de asistente anterior
+    corresponde a una consulta de calendario o contiene listados de eventos,
+    se reemplaza por un resumen estructurado neutral para evitar que el LLM
+    vuelque listas redundantes en turnos posteriores (ej. al recibir un 'gracias').
     """
     max_tok = settings.history_max_tokens_estimate
-    working_history = list(history)
+    working_history: list[dict[str, str]] = []
+
+    for i, msg in enumerate(history):
+        msg_copy = dict(msg)
+        if msg_copy.get("role") == "assistant":
+            prev_msg = history[i - 1] if i > 0 else {}
+            prev_user_text = prev_msg.get("content", "") if prev_msg.get("role") == "user" else ""
+            if detect_calendar_intent(prev_user_text) is not None:
+                msg_copy["content"] = "[Sistema: Se mostró al usuario la agenda visual en pantalla. Los datos exactos están en la UI.]"
+            elif any(k in msg_copy.get("content", "").lower() for k in [
+                "se mostró al usuario la agenda",
+                "agenda visual en pantalla",
+                "he generado tu agenda",
+                "aquí tienes tu agenda",
+            ]):
+                msg_copy["content"] = "[Sistema: Se mostró al usuario la agenda visual en pantalla. Los datos exactos están en la UI.]"
+        working_history.append(msg_copy)
 
     max_msgs = settings.history_max_turns * 2
     if len(working_history) > max_msgs:
@@ -849,9 +872,71 @@ async def _run_llm_and_tts(
     if t_start is None:
         t_start = time.perf_counter()
 
+    # ─── Calendar Intent Bypass ───────────────────────────────────────────
+    # Si la consulta es una petición directa de calendario ("¿qué tengo esta semana?",
+    # "¿cuál es mi próximo examen?"), bypassamos el LLM para evitar alucinaciones
+    # y enviamos directamente un JSON estructurado tipo calendar_card al frontend.
+    cal_intent = detect_calendar_intent(user_text)
+    if cal_intent is not None:
+        tool_name = cal_intent["tool_name"]
+        tool_params = cal_intent["params"]
+        logger.info(
+            f"[calendar_bypass] Intercepted intent '{cal_intent['intent']}' -> {tool_name}({tool_params})"
+        )
+        card_data = await execute_calendar_tool(
+            tool_name, tool_params, return_structured=True
+        )
+        # Enviar tarjeta interactiva de calendario al frontend
+        await websocket.send_json(card_data)
+
+        # Frase introductoria concisa y predecible
+        intent_type = cal_intent["intent"]
+        if intent_type in ("read_week", "read_range"):
+            intro_text = "He generado tu agenda. Haz clic en la tarjeta para ver los detalles."
+        elif intent_type == "next_deadline":
+            if isinstance(card_data, dict) and card_data.get("deadline"):
+                dl = card_data["deadline"]
+                intro_text = f"Tu próximo evento evaluativo es {dl['name']} el {dl['day_name']}. Haz clic en la tarjeta para ver los detalles."
+            else:
+                intro_text = "He consultado tus próximos eventos. Haz clic en la tarjeta para ver los detalles."
+        elif intent_type == "free_slots":
+            intro_text = "He calculado tus bloques de tiempo libre. Haz clic en la tarjeta para ver los detalles."
+        else:
+            intro_text = "Aquí tienes la información de tu calendario. Haz clic en la tarjeta para ver los detalles."
+
+        # Si la voz está activada, sintetizar y reproducir la frase vía TTS
+        if voice_enabled:
+            tts_queue = asyncio.Queue(maxsize=8)
+            tts_metrics: dict[str, Any] = {"tts_first_chunk_ms": None, "tts_total_streaming_ms": 0.0}
+            worker_task = asyncio.create_task(
+                _tts_worker(websocket, tts_queue, ctx.cancel_event, tts_metrics),
+                name="tts_worker_bypass",
+            )
+            parts = _split_long_sentence(intro_text, max_chars=_TTS_MAX_CHARS)
+            for sid, part in enumerate(parts):
+                part = part.strip()
+                if part:
+                    await tts_queue.put((sid, part))
+            await tts_queue.put(None)
+            try:
+                await asyncio.wait_for(worker_task, timeout=30.0)
+            except Exception as e:
+                logger.warning(f"[calendar_bypass] TTS synthesis error/timeout: {e}")
+
+        # Enviar assistant_text para que la UI finalice el turno de conversación
+        await websocket.send_json({
+            "type": "assistant_text",
+            "text": intro_text,
+            "history_content": "[Sistema: Se mostró al usuario la agenda visual en pantalla. Los datos exactos están en la UI.]",
+        })
+        return
+
     system_prompt = build_system_prompt(
         _system_prompt_template,
         input_mode=input_mode,
+    )
+    logger.debug(
+        f"[system_prompt] Built prompt (first 800 chars):\n{system_prompt[:800]}"
     )
     working_history = _prepare_history(history, system_prompt, user_text)
     messages = format_chat_messages(
@@ -898,6 +983,13 @@ async def _run_llm_and_tts(
                 t_first_tts_enqueue = time.perf_counter()
             sentence_id += 1
 
+    async def _on_tool_execute(fn_name: str, args: dict[str, Any], tool_result: str) -> None:
+        if fn_name in ("calendar_read_range", "calendar_next_deadline", "calendar_free_slots"):
+            structured_card = await execute_calendar_tool(fn_name, args, return_structured=True)
+            if isinstance(structured_card, dict) and structured_card.get("type") == "calendar_card":
+                logger.info(f"[calendar_hybrid] Sending calendar_card to frontend from tool '{fn_name}'")
+                await websocket.send_json(structured_card)
+
     try:
         async for token in stream_chat_with_tools(
             messages=messages,
@@ -909,6 +1001,7 @@ async def _run_llm_and_tts(
             repeat_penalty=settings.llm_repeat_penalty,
             cancel_event=ctx.cancel_event,
             metrics=llm_metrics,
+            on_tool_execute=_on_tool_execute,
         ):
             if ctx.cancel_event.is_set():
                 logger.info(f"[pipeline] Cancelled during LLM streaming (mode={input_mode})")
