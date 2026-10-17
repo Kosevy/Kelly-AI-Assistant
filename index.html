@@ -1183,8 +1183,10 @@ async function handleFilesUpload(files) {
 }
 
 function escapeHtml(text) {
+    if (!text) return '';
+    const val = typeof text === 'string' ? text : (text.text || '');
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = val;
     return div.innerHTML;
 }
 
@@ -1282,11 +1284,6 @@ let conversationHistory = [];  // [{role: "user"|"assistant", content: "..."}]
 const MAX_TURNS = 12;          // 12 turnos = 24 mensajes
 
 // ─── Markdown Rendering Helper ───────────────────────────────────────────────
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = (typeof text === 'string' ? text : (text ? text.text || '' : ''));
-    return div.innerHTML;
-}
 
 if (window.marked) {
     const renderer = new marked.Renderer();
@@ -1575,13 +1572,6 @@ function finalizeAssistantMessage(fullText) {
     currentAssistantContent = null;
     currentAssistantText = "";
     historyMsgs.scrollTop = historyMsgs.scrollHeight;
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
 
 // ─── Estado Global y Funciones del Drawer de Calendario ──────────────────────
