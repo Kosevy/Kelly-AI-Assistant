@@ -64,6 +64,7 @@ async def stream_chat_with_tools(
     tool_timeout_s: float = 10.0,
     cancel_event: asyncio.Event | None = None,
     metrics: dict[str, Any] | None = None,
+    on_tool_execute: Any | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Generador asíncrono que transmite tokens generados por el LLM mediante SSE.
@@ -73,7 +74,12 @@ async def stream_chat_with_tools(
     Registra el TTFT (Time-To-First-Token) en el diccionario metrics.
     """
     url = server_url or settings.llm_chat_url
-    temp = temperature if temperature is not None else settings.llm_temperature
+    # Rationale: cuando el LLM tiene tools disponibles, usamos una temperature más baja
+    # (settings.tool_calling_temperature) para minimizar alucinaciones en la selección
+    # y argumentos de tools. Si no hay tools o se pasa explícitamente, usamos la general.
+    temp = temperature if temperature is not None else (
+        settings.tool_calling_temperature if tools else settings.llm_temperature
+    )
     max_tok = max_tokens if max_tokens is not None else settings.llm_max_tokens
     p_val = top_p if top_p is not None else settings.llm_top_p
     rep_pen = repeat_penalty if repeat_penalty is not None else settings.llm_repeat_penalty
@@ -182,6 +188,9 @@ async def stream_chat_with_tools(
             )
             executed_cache: dict[str, str] = {}
 
+            mode = settings.tool_result_injection_mode
+            logger.debug(f"[llm_client] Injecting tool result via mode={mode}")
+
             for tc in tool_calls_list:
                 fn_name = tc.get("function", {}).get("name", "")
                 raw_args = tc.get("function", {}).get("arguments", "{}")
@@ -207,11 +216,59 @@ async def stream_chat_with_tools(
                         tool_result = f"Error ejecutando '{fn_name}': {exc}"
                     executed_cache[cache_key] = tool_result
 
-                working_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": tool_result,
-                })
+                logger.debug(f"[tool_result] {fn_name}({args}) → {tool_result[:500]}...")
+
+                if on_tool_execute is not None:
+                    try:
+                        hook_res = on_tool_execute(fn_name, args, tool_result)
+                        if asyncio.iscoroutine(hook_res):
+                            await hook_res
+                    except Exception as exc:
+                        logger.warning(f"[llm_client] on_tool_execute callback failed: {exc}")
+
+                if mode == "user_message":
+                    # 1. Mensaje de assistant vacío o con contexto mínimo (mantiene estructura de turnos)
+                    working_messages.append({
+                        "role": "assistant",
+                        "content": "",
+                    })
+                    # 2. Mensaje de user con el resultado inyectado
+                    if fn_name.startswith("calendar_"):
+                        directive = (
+                            "[RESULTADO DEL SISTEMA — usa esto solo para responder o resumir]\n"
+                            f"El tool `{fn_name}` devolvió:\n\n"
+                            f"{tool_result}\n\n"
+                            "[FIN DEL RESULTADO]\n\n"
+                            "NOTA: El calendario ya fue mostrado al usuario en pantalla como una tarjeta visual interactiva. "
+                            "Tú NO necesitas transcribir listas completas de horarios ni eventos. "
+                            "Usa los datos exclusivamente para tu resumen conversacional o para responder a la pregunta del usuario."
+                        )
+                    else:
+                        directive = (
+                            "[RESULTADO DEL SISTEMA — usa esto literalmente]\n"
+                            f"El tool `{fn_name}` devolvió:\n\n"
+                            f"{tool_result}\n\n"
+                            "[FIN DEL RESULTADO]\n\n"
+                            "Basándote EXCLUSIVAMENTE en el resultado anterior, responde la pregunta del usuario. "
+                            "NO inventes datos, NO resumas, NO generalices. Si el resultado está vacío, dilo."
+                        )
+                    working_messages.append({
+                        "role": "user",
+                        "content": directive,
+                    })
+                else:
+                    # Modo 'tool_role': estándar OpenAI
+                    content = tool_result
+                    if fn_name.startswith("calendar_"):
+                        content = f"{tool_result}\n\n[El calendario ya fue mostrado al usuario en pantalla. Usa los datos solo para tu resumen conversacional.]"
+                    working_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": content,
+                    })
+
+            if mode == "user_message":
+                logger.debug(f"[llm_client] Message injected: {working_messages[-1]['content'][:300]}...")
 
             # Continuar siguiente iteración con la información de las herramientas inyectada
             continue

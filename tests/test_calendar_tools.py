@@ -90,7 +90,7 @@ def test_calendar_file(tmp_path: Path) -> Path:
 
 @pytest.mark.asyncio
 async def test_tool_calendar_read_range(test_calendar_file: Path):
-    """calendar_read_range retorna los eventos y clases correspondientes a ese rango."""
+    """calendar_read_range retorna los eventos y clases en formato semi-compacto con encabezados en negrita y duraciones."""
     # Rango de la semana del 2026-05-11 al 2026-05-17 (incluye Lunes 11 [clase], Martes 12 [parcial], Miércoles 13 [clase])
     res = await execute_calendar_tool(
         "calendar_read_range",
@@ -98,10 +98,45 @@ async def test_tool_calendar_read_range(test_calendar_file: Path):
         calendar_path=test_calendar_file,
     )
 
-    assert "Parcial Cálculo III" in res
-    assert "Cálculo III - Teoría" in res
-    assert "2026-05-12" in res
-    assert "[exam]" in res
+    assert "**Lunes 11 de mayo**" in res
+    assert "- 08:00-10:00 Cálculo III - Teoría (Cálculo III)" in res
+    assert "**Martes 12 de mayo**" in res
+    assert "- 10:00-12:00 Parcial Cálculo III (Cálculo III)" in res
+    assert "**Miércoles 13 de mayo**" in res
+    assert "- 08:00-10:00 Cálculo III - Teoría (Cálculo III)" in res
+    assert "**Jueves 14 de mayo**" in res
+    assert "- (sin eventos programados)" in res
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_read_range_semicompact_format_5_days(test_calendar_file: Path):
+    """Rango de 5 días genera formato semi-compacto con encabezados de días y duración explícita."""
+    res = await execute_calendar_tool(
+        "calendar_read_range",
+        {"start_date": "2026-05-11", "end_date": "2026-05-15"},
+        calendar_path=test_calendar_file,
+    )
+    assert "**Lunes 11 de mayo**" in res
+    assert "- 08:00-10:00 Cálculo III - Teoría (Cálculo III)" in res
+    assert "**Martes 12 de mayo**" in res
+    assert "- 10:00-12:00 Parcial Cálculo III (Cálculo III)" in res
+    assert "**Miércoles 13 de mayo**" in res
+    assert "**Jueves 14 de mayo**\n- (sin eventos programados)" in res
+    assert "**Viernes 15 de mayo**\n- (sin eventos programados)" in res
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_read_range_scope_limit_30_days(test_calendar_file: Path):
+    """Rango mayor a calendar_read_max_days (7 días) se acota a los primeros 7 días con mensaje explicativo."""
+    res = await execute_calendar_tool(
+        "calendar_read_range",
+        {"start_date": "2026-05-01", "end_date": "2026-05-30"},
+        calendar_path=test_calendar_file,
+    )
+    assert "[Rango completo: 30 días. Mostrando primeros 7. Pedir rangos más específicos para ver más.]" in res
+    assert "**Viernes 1 de mayo**" in res
+    assert "**Jueves 7 de mayo**" in res
+    assert "**Viernes 8 de mayo**" not in res
 
 
 @pytest.mark.asyncio
@@ -115,6 +150,8 @@ async def test_tool_calendar_read_range_with_type_filter(test_calendar_file: Pat
 
     assert "Parcial Cálculo III" in res
     assert "Cálculo III - Teoría" not in res
+    assert "**Martes 12 de mayo**" in res
+    assert "**Lunes 11 de mayo**\n- (sin eventos programados)" in res
 
 
 @pytest.mark.asyncio
@@ -234,6 +271,63 @@ async def test_dispatch_via_app_tools(test_calendar_file: Path, monkeypatch):
     assert "calc3" in res
 
 
+@pytest.mark.asyncio
+async def test_tool_calendar_next_deadline_exam(test_calendar_file: Path):
+    """calendar_next_deadline encuentra el próximo examen desde la fecha base."""
+    res = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"types": ["exam"], "from_date": "2026-04-01"},
+        calendar_path=test_calendar_file,
+    )
+    assert "Próximo: Parcial Cálculo III" in res
+    assert "2026-05-12 10:00" in res
+    assert "calc3" in res
+    assert "faltan 41 días" in res
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_next_deadline_entregable(test_calendar_file: Path):
+    """calendar_next_deadline con types=['entregable'] filtra correctamente."""
+    res = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"types": ["entregable"], "from_date": "2026-04-01"},
+        calendar_path=test_calendar_file,
+    )
+    assert "Próximo: Entrega Proyecto BD" in res
+    assert "2026-04-05" in res
+    assert "bd" in res
+    assert "faltan 4 días" in res
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_next_deadline_empty_types(test_calendar_file: Path):
+    """calendar_next_deadline sin types o con types=[] busca entre todos y devuelve el más cercano."""
+    res = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"types": [], "from_date": "2026-04-01"},
+        calendar_path=test_calendar_file,
+    )
+    assert "Próximo: Entrega Proyecto BD" in res
+
+    res_no_types = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"from_date": "2026-04-01"},
+        calendar_path=test_calendar_file,
+    )
+    assert "Próximo: Entrega Proyecto BD" in res_no_types
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_next_deadline_no_future_events(test_calendar_file: Path):
+    """calendar_next_deadline cuando no hay eventos futuros devuelve mensaje informativo."""
+    res = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"types": ["exam"], "from_date": "2026-06-01"},
+        calendar_path=test_calendar_file,
+    )
+    assert "No hay eventos próximos" in res
+
+
 def test_tools_list_contains_calendar_tools():
     """TOOLS de app.tools debe contener las herramientas de archivo y de calendario."""
     tool_names = {t["function"]["name"] for t in TOOLS}
@@ -242,8 +336,75 @@ def test_tools_list_contains_calendar_tools():
         "list_directory",
         "calendar_read_range",
         "calendar_free_slots",
+        "calendar_next_deadline",
         "calendar_add_event",
         "calendar_list_courses",
         "calendar_delete_event",
     }
     assert expected.issubset(tool_names)
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_read_range_structured(test_calendar_file: Path):
+    """calendar_read_range con return_structured=True devuelve un dict tipo calendar_card con días y eventos."""
+    res = await execute_calendar_tool(
+        "calendar_read_range",
+        {"start_date": "2026-05-11", "end_date": "2026-05-17"},
+        calendar_path=test_calendar_file,
+        return_structured=True,
+    )
+    assert isinstance(res, dict)
+    assert res["type"] == "calendar_card"
+    assert res["view_type"] == "week"
+    assert "Semana del 11 al 17 de mayo" in res["title"]
+    assert len(res["days"]) == 7
+
+    # Lunes 11 de mayo tiene clase de Cálculo III
+    monday_data = res["days"][0]
+    assert monday_data["date"] == "2026-05-11"
+    assert "Lunes 11 de mayo" in monday_data["day_name"]
+    assert len(monday_data["events"]) >= 1
+    ev0 = monday_data["events"][0]
+    assert ev0["start"] == "08:00"
+    assert ev0["end"] == "10:00"
+    assert ev0["name"] == "Cálculo III - Teoría"
+    assert ev0["type"] == "class"
+    assert ev0["course"] == "Cálculo III"
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_next_deadline_structured(test_calendar_file: Path):
+    """calendar_next_deadline con return_structured=True devuelve el evento evaluativo estructurado."""
+    res = await execute_calendar_tool(
+        "calendar_next_deadline",
+        {"types": ["exam"], "from_date": "2026-04-01"},
+        calendar_path=test_calendar_file,
+        return_structured=True,
+    )
+    assert isinstance(res, dict)
+    assert res["type"] == "calendar_card"
+    assert res["view_type"] == "deadline"
+    assert res["deadline"] is not None
+    assert res["deadline"]["name"] == "Parcial Cálculo III"
+    assert res["deadline"]["date"] == "2026-05-12"
+    assert res["deadline"]["type"] == "exam"
+    assert res["deadline"]["course"] == "Cálculo III"
+    assert "días" in res["deadline"]["days_left_text"]
+    assert len(res["days"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_calendar_free_slots_structured(test_calendar_file: Path):
+    """calendar_free_slots con return_structured=True devuelve los bloques libres estructurados."""
+    res = await execute_calendar_tool(
+        "calendar_free_slots",
+        {"start_date": "2026-05-11", "end_date": "2026-05-11", "min_block_minutes": 60},
+        calendar_path=test_calendar_file,
+        return_structured=True,
+    )
+    assert isinstance(res, dict)
+    assert res["type"] == "calendar_card"
+    assert res["view_type"] == "free_slots"
+    assert len(res["slots"]) > 0
+    assert "duration_minutes" in res["slots"][0]
+    assert len(res["days"]) == 1

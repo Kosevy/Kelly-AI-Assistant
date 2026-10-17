@@ -1,0 +1,421 @@
+# Calendario de Kelly — editar una vez por semestre.
+
+metadata:
+  student_name: "Diego Antonio Ramos Hinostroza"
+  semester: "2026-2"
+  semester_start: 2026-08-24
+  semester_end: 2026-12-05
+  exam_weeks:
+    parciales: 8
+    finales: 15
+
+courses:
+  - id: "redes"
+    name: "Redes y Comunicaciones de Datos"
+    difficulty: 5
+    sessions_per_week: 2
+    topics:
+      - "Por definir"
+
+  - id: "admm"
+    name: "Aplicaciones para Dispositivos Móviles"
+    difficulty: 4
+    sessions_per_week: 2
+    topics:
+      - "Por definir"
+
+  - id: "fas"
+    name: "Fundamentos de Arquitectura de Software"
+    difficulty: 1
+    sessions_per_week: 2
+    topics:
+      - "Por definir"
+
+  - id: "fie"
+    name: "Finanzas e Ingeniería Económica"
+    difficulty: 3
+    sessions_per_week: 2
+    topics:
+      - "Por definir"
+
+recurring_blocks:
+  - name: "Almuerzo"
+    type: "meal"
+    day_of_week: ["monday", "wednesday", "thursday", "saturday", "sunday"]
+    start_time: "12:00"
+    end_time: "13:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Gym"
+    type: "exercise"
+    day_of_week: ["monday", "wednesday", "saturday"]
+    start_time: "13:00"
+    end_time: "15:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["tuesday"]
+    start_time: "08:00"
+    end_time: "10:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Fundamentos de Arquitectura de Software"
+    course_id: "fas"
+    type: "class"
+    day_of_week: ["tuesday"]
+    start_time: "10:00"
+    end_time: "13:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Fundamentos de Arquitectura de Software"
+    course_id: "fas"
+    type: "class"
+    day_of_week: ["friday"]
+    start_time: "11:00"
+    end_time: "13:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Aplicaciones para Dispositivos Móviles"
+    course_id: "admm"
+    type: "class"
+    day_of_week: ["tuesday"]
+    start_time: "13:00"
+    end_time: "16:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["tuesday"]
+    start_time: "16:00"
+    end_time: "17:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["wednesday", "thursday", "friday"]
+    start_time: "05:00"
+    end_time: "07:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Redes y Comunicaciones de Datos"
+    course_id: "redes"
+    type: "class"
+    day_of_week: ["wednesday"]
+    start_time: "07:00"
+    end_time: "10:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Redes y Comunicaciones de Datos"
+    course_id: "redes"
+    type: "class"
+    day_of_week: ["friday"]
+    start_time: "07:00"
+    end_time: "09:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Finanzas e Ingeniería Económica"
+    course_id: "fie"
+    type: "class"
+    day_of_week: ["thursday"]
+    start_time: "07:00"
+    end_time: "10:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["wednesday", "thursday"]
+    start_time: "10:00"
+    end_time: "12:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Aplicaciones para Dispositivos Móviles"
+    course_id: "admm"
+    type: "class"
+    day_of_week: ["thursday"]
+    start_time: "14:00"
+    end_time: "16:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["thursday"]
+    start_time: "16:00"
+    end_time: "17:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["friday"]
+    start_time: "09:00"
+    end_time: "11:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Almuerzo"
+    type: "meal"
+    day_of_week: ["friday"]
+    start_time: "13:00"
+    end_time: "14:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["friday"]
+    start_time: "14:00"
+    end_time: "15:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Finanzas e Ingeniería Económica"
+    course_id: "fie"
+    type: "class"
+    day_of_week: ["friday"]
+    start_time: "17:00"
+    end_time: "19:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+  - name: "Transporte"
+    type: "transport"
+    day_of_week: ["friday"]
+    start_time: "19:00"
+    end_time: "20:00"
+    from_date: 2026-08-24
+    to_date: 2026-12-05
+
+events:
+  - id: "entrega_admm_2"
+    name: "Entrega Proyecto de Móviles - Avance 2 (AV2 - Sprint Review)"
+    type: "entregable"
+    course_id: "admm"
+    date: 2026-11-10
+    estimated_hours: 15
+    notes: "Tercer hito del trabajo final (Semana 12). Backend al 100% desplegado con Swagger, pantallas core, Sprint 2, videos de validación y About-the-Product/Team."
+
+  - id: "pc2_admm"
+    name: "Práctica Calificada 2 - Aplicaciones para Dispositivos Móviles"
+    type: "exam"
+    course_id: "admm"
+    date: 2026-11-17
+    start_time: "13:00"
+    duration_minutes: 30
+    weight: 0.10
+    topics_covered:
+      - "Unidad 2 y Unidad 3: Desarrollo Cross-Platform con Flutter"
+      - "Persistencia de datos y Networking en Flutter"
+    notes: "Evaluación individual síncrona en la Semana 13, aula virtual."
+
+  - id: "tb2_admm"
+    name: "Trabajo Final (TB2) - Release Review & Sustentación"
+    type: "entregable"
+    course_id: "admm"
+    date: 2026-12-01
+    estimated_hours: 25
+    weight: 0.15
+    topics_covered:
+      - "Proyecto móvil completo desplegado en Firebase App Distribution"
+      - "Backend RESTful al 100%, Sprint 3, videos finales y certificado Google Cloud Career Launchpad"
+    notes: "Informe final, keynote, reporte de participación, artefactos y sustentación síncrona."
+
+  - id: "eb1_admm"
+    name: "Evaluación Final (EB1) - Examen Final"
+    type: "exam"
+    course_id: "admm"
+    date: 2026-12-08
+    start_time: "13:00"
+    duration_minutes: 170
+    weight: 0.20
+    topics_covered:
+      - "Desarrollo integral de una aplicación móvil en Flutter con Dart"
+      - "Implementación de interfaces y navegación entre pantallas"
+      - "Persistencia local de datos mediante SQLite"
+      - "Implementación de funcionalidades interactivas y validaciones"
+      - "Aplicación de estándares de nomenclatura en inglés"
+    notes: "Evaluación final individual y síncrona de 170 minutos."
+
+  - id: "t6_fie"
+    name: "Tarea N°6: Análisis de Reemplazo (VAC, MCM, CAUE y CC)"
+    type: "entregable"
+    course_id: "fie"
+    date: 2026-11-01
+    start_time: "23:59"
+    topics_covered:
+      - "Análisis de reemplazo de activos fijos e ingeniería económica"
+      - "Cálculo del VAC, MCM, CAUE y CC"
+    notes: "Evaluación grupal en la Semana 10."
+
+  - id: "t7_fie"
+    name: "Tarea N°7: Planes de Pago y Cronogramas de Amortización"
+    type: "entregable"
+    course_id: "fie"
+    date: 2026-11-08
+    start_time: "23:59"
+    topics_covered:
+      - "Construcción y comparación de planes de pago"
+      - "Tratamiento contable y financiero de periodos de gracia"
+    notes: "Evaluación grupal en la Semana 11."
+
+  - id: "t8_fie"
+    name: "Tarea N°8: Valoración de Acciones"
+    type: "entregable"
+    course_id: "fie"
+    date: 2026-11-15
+    start_time: "23:59"
+    topics_covered:
+      - "Valuación de títulos de renta variable"
+      - "Modelo de crecimiento constante de dividendos"
+    notes: "Evaluación grupal en la Semana 12."
+
+  - id: "t9_fie"
+    name: "Tarea N°9: Valoración de Bonos Corporativos"
+    type: "entregable"
+    course_id: "fie"
+    date: 2026-11-22
+    start_time: "23:59"
+    topics_covered:
+      - "Valuación de instrumentos financieros de renta fija"
+      - "Estructuración de cupones y cálculo de TIR/TCEA"
+    notes: "Evaluación grupal en la Semana 13."
+
+  - id: "tb2_fie"
+    name: "Trabajo Final (TB2) - Hito 2: Solución Web o Móvil"
+    type: "entregable"
+    course_id: "fie"
+    date: 2026-12-03
+    start_time: "07:00"
+    duration_minutes: 20
+    weight: 0.20
+    topics_covered:
+      - "Implementación ejecutable de un sistema de información web o móvil"
+      - "Autenticación segura, persistencia en BD relacional, motor de cálculo financiero"
+    notes: "Entrega grupal en la Semana 15 previa a la primera clase."
+
+  - id: "eb1_fie"
+    name: "Evaluación Final (EB1) - Examen Final"
+    type: "exam"
+    course_id: "fie"
+    date: 2026-12-11
+    start_time: "17:00"
+    duration_minutes: 170
+    weight: 0.20
+    topics_covered:
+      - "Indicadores de rentabilidad y viabilidad de proyectos"
+      - "Análisis de reemplazo de activos"
+      - "Valoración de instrumentos financieros"
+      - "Cálculo del WACC y evaluación económica integral"
+    notes: "Examen individual síncrono en la Semana 16."
+
+  - id: "a3_fas"
+    name: "Avance 3 del Proyecto (A3) - Arquitectura Cloud & Patrones de Integración"
+    type: "entregable"
+    course_id: "fas"
+    date: 2026-11-03
+    start_time: "19:00"
+    topics_covered:
+      - "Diseño e implementación de arquitectura Cloud Native"
+      - "Definición de capas de persistencia distribuida"
+    notes: "Revisión síncrona en la Semana 10."
+
+  - id: "a4_fas"
+    name: "Avance 4 del Proyecto (A4) - Arquitectura Hexagonal, Contenedores y Pruebas"
+    type: "entregable"
+    course_id: "fas"
+    date: 2026-11-17
+    start_time: "19:00"
+    topics_covered:
+      - "Estructuración del backend en Java/Spring Boot"
+      - "Contenedorización con Docker"
+    notes: "Revisión síncrona en la Semana 12."
+
+  - id: "pc2_fas"
+    name: "Práctica Calificada 2 (PC2) - Evaluación Práctica"
+    type: "exam"
+    course_id: "fas"
+    date: 2026-11-24
+    start_time: "11:00"
+    duration_minutes: 100
+    weight: 0.10
+    topics_covered:
+      - "Cloud Architecture & Patterns, IaC, Multi-Cloud Architecture"
+      - "Configuración de entornos de ejecución en la nube/Docker"
+    notes: "Evaluación individual síncrona en la Semana 13."
+
+  - id: "tf1_fas"
+    name: "Trabajo Final 1 (TF1) - Entregable Integral de Proyecto"
+    type: "entregable"
+    course_id: "fas"
+    date: 2026-12-08
+    start_time: "23:59"
+    weight: 0.15
+    topics_covered:
+      - "Desarrollo completo e integral de un producto de software empresarial"
+      - "Implementación end-to-end del software"
+    notes: "Entregable grupal final en la Semana 15."
+
+  - id: "eb1_fas"
+    name: "Evaluación Final (EB1) - Examen Final"
+    type: "exam"
+    course_id: "fas"
+    date: 2026-12-15
+    start_time: "13:00"
+    duration_minutes: 170
+    weight: 0.20
+    topics_covered:
+      - "Desarrollo práctico de un caso de estudio integral de arquitectura"
+      - "Elaboración de Diagrama de Contexto y Contenedores según C4 Model"
+    notes: "Evaluación individual síncrona en la Semana 16."
+
+  - id: "pc2_redes"
+    name: "Práctica Calificada 2 (PC2) - Evaluación Práctica"
+    type: "exam"
+    course_id: "redes"
+    date: 2026-11-20
+    start_time: "19:00"
+    duration_minutes: 100
+    weight: 0.10
+    notes: "Evaluación individual síncrona."
+
+  - id: "eb1_redes"
+    name: "Evaluación Final - Redes y Comunicaciones de Datos"
+    type: "exam"
+    course_id: "redes"
+    date: 2026-12-09
+    start_time: "07:00"
+    duration_minutes: 90
+    weight: 0.20
+    topics_covered:
+      - "Contenidos de las semanas 9 a 15"
+      - "Enrutamiento estático y dinámico (RIPv2)"
+      - "Capa de transporte TCP/UDP y capa de aplicación"
+      - "Listas de control de acceso (ACL IPv4)"
+      - "Internet de las Cosas (IoT) y direccionamiento IPv6"
+      - "Tecnologías WAN, servicios de red y seguridad"
+    notes: "Semana 16. Evaluación final del curso según sílabo."
+
+  - id: "tf_redes"
+    name: "Presentación de Trabajo Final - Redes y Comunicaciones de Datos"
+    type: "entregable"
+    course_id: "redes"
+    date: 2026-12-02
+    weight: 0.15
+    topics_covered:
+      - "Proyecto final de redes: diseño, configuración e interconexión"
+      - "Segmentación con subnetting y VLSM, VLANs y enrutamiento inter-VLAN"
+      - "Direccionamiento IPv4, enrutamiento IP, WAN, servicios de red"
+    notes: "Semana 15. Trabajo grupal: sustentación de proyecto final."

@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(
         default=0.4, description="LLM sampling temperature (lower = more deterministic)"
     )
+    tool_calling_temperature: float = Field(
+        default=0.5,
+        description="Temperature cuando se usan tools. 0.5 es el balance entre determinismo y flexibilidad.",
+    )
+    tool_result_injection_mode: str = Field(
+        default="user_message",
+        description="Modo de inyección de tool results al LLM. "
+                    "'tool_role' usa role='tool' (comportamiento estándar OpenAI). "
+                    "'user_message' inyecta como role='user' con preámbulo explícito "
+                    "(experimento para mejorar grounding en modelos pequeños).",
+    )
     llm_max_tokens: int = Field(
         default=2048, description="Maximum tokens to generate"
     )
@@ -210,9 +221,25 @@ class Settings(BaseSettings):
         default="data/calendar_backups",
         description="Directorio para backups automáticos del calendario",
     )
+    calendar_read_max_days: int = Field(
+        default=7,
+        description="Máximo de días a devolver en un solo calendar_read_range",
+    )
+    free_slots_mode: str = Field(
+        default="realistic",
+        description=(
+            "Modo de cálculo de huecos libres. "
+            "'literal': solo class/study/exam bloquean (comportamiento anterior). "
+            "'realistic': meal/transport/exercise también parten los huecos."
+        ),
+    )
     free_slots_busy_types: list[str] | str = Field(
         default=["class", "study", "exam", "entregable", "presentacion", "practica"],
         description="Tipos de eventos o bloques considerados ocupados para cálculo de tiempo libre",
+    )
+    free_slots_realistic_break_types: list[str] | str = Field(
+        default=["meal", "transport", "exercise"],
+        description="Tipos que parten huecos en modo realistic pero no aparecen como 'ocupado'.",
     )
     calendar_type_aliases: dict[str, str] = Field(
         default={
@@ -233,8 +260,61 @@ class Settings(BaseSettings):
             "Sobreescribir en .env con KELLY_CALENDAR_TYPE_ALIASES='{\"personal\": \"exercise\"}'."
         ),
     )
+    calendar_intent_patterns: dict[str, list[str]] = Field(
+        default={
+            "read_week": [
+                "que tengo esta semana", "qué tengo esta semana",
+                "que tengo la proxima semana", "qué tengo la próxima semana",
+                "que tengo la siguiente semana", "qué tengo la siguiente semana",
+                "agenda de la semana", "agenda de esta semana", "agenda de la proxima semana",
+                "horario de la semana", "horario de esta semana", "horario de la proxima semana",
+                "que tengo hoy", "qué tengo hoy",
+                "que tengo manana", "qué tengo mañana",
+                "que tengo el", "qué tengo el",
+                "horario de hoy", "horario de manana", "horario de mañana",
+                "agenda de hoy", "agenda de manana", "agenda de mañana",
+                "mi semana", "mi horario", "mi agenda",
+            ],
+            "next_deadline": [
+                "proximo examen", "próximo examen",
+                "proxima entrega", "próxima entrega",
+                "que viene", "qué viene",
+                "que entrega viene", "qué entrega viene",
+                "proxima practica", "próxima práctica", "proxima pc", "próxima pc",
+                "cuando es mi examen", "cuándo es mi examen",
+                "cual es mi proximo examen", "cuál es mi próximo examen",
+                "cual es mi proxima entrega", "cuál es mi próxima entrega",
+                "proximo deadline", "próximo deadline", "proxima evaluacion", "próxima evaluación",
+            ],
+            "free_slots": [
+                "tengo tiempo", "huecos libres", "tiempo para estudiar",
+                "cuando tengo tiempo", "cuándo tengo tiempo", "tiempo libre",
+                "espacio libre", "hueco para estudiar", "ratos libres",
+            ],
+        },
+        description="Patrones de texto para detectar intenciones de calendario antes de llamar al LLM.",
+    )
 
-    @field_validator("allowed_paths", "free_slots_busy_types", mode="after")
+    @field_validator("calendar_intent_patterns", "calendar_type_aliases", mode="before")
+    @classmethod
+    def _parse_dict_from_str(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                import ast
+                try:
+                    return ast.literal_eval(v)
+                except Exception:
+                    pass
+        return v
+
+    @field_validator(
+        "allowed_paths",
+        "free_slots_busy_types",
+        "free_slots_realistic_break_types",
+        mode="after",
+    )
     @classmethod
     def _parse_list_or_csv(cls, v: Any) -> list[str]:
         if isinstance(v, str):

@@ -45,6 +45,16 @@ class TestDefaultSettings:
         assert s.history_max_turns == 12
         assert s.history_max_tokens_estimate == 8192
 
+    def test_default_tool_calling_temperature(self):
+        from app.config import Settings
+        s = Settings()
+        assert s.tool_calling_temperature == 0.5
+
+    def test_default_tool_result_injection_mode(self):
+        from app.config import Settings
+        s = Settings()
+        assert s.tool_result_injection_mode == "user_message"
+
 
 class TestEnvOverrides:
     def test_env_overrides_temperature(self):
@@ -53,6 +63,18 @@ class TestEnvOverrides:
             from app.config import Settings
             s = Settings()
             assert s.llm_temperature == pytest.approx(0.1)
+
+    def test_env_overrides_tool_calling_temperature(self):
+        with patch.dict(os.environ, {"KELLY_TOOL_CALLING_TEMPERATURE": "0.35"}):
+            from app.config import Settings
+            s = Settings()
+            assert s.tool_calling_temperature == pytest.approx(0.35)
+
+    def test_env_overrides_tool_result_injection_mode(self):
+        with patch.dict(os.environ, {"KELLY_TOOL_RESULT_INJECTION_MODE": "tool_role"}):
+            from app.config import Settings
+            s = Settings()
+            assert s.tool_result_injection_mode == "tool_role"
 
     def test_env_overrides_stt_model(self):
         with patch.dict(os.environ, {"KELLY_STT_MODEL": "base"}):

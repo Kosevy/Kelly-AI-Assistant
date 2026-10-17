@@ -42,8 +42,8 @@ def test_free_slots_empty_calendar():
     assert end_dt == datetime(2026, 4, 10, 23, 0)
 
 
-def test_free_slots_ignores_meal_and_transport():
-    """Bloques tipo meal y transport no deben bloquear la disponibilidad."""
+def test_free_slots_mode_literal():
+    """En modo 'literal', bloques tipo meal y transport no deben partir la disponibilidad (compatibilidad)."""
     target_date = date(2026, 4, 10)
     blocks = [
         ExpandedBlock(
@@ -73,11 +73,143 @@ def test_free_slots_ignores_meal_and_transport():
         min_block_minutes=30,
         day_start=time(6, 0),
         day_end=time(23, 0),
+        mode="literal",
     )
 
-    # Debe seguir libre todo el día de 6:00 a 23:00 porque meal y transport no son busy
+    # Debe seguir libre todo el día de 6:00 a 23:00 en modo literal
     assert len(slots) == 1
     assert slots[0] == (datetime(2026, 4, 10, 6, 0), datetime(2026, 4, 10, 23, 0))
+
+
+def test_free_slots_realistic_mode_splits_by_meal_and_breaks():
+    """En modo 'realistic', meal, transport y exercise parten los huecos en bloques útiles."""
+    target_date = date(2026, 4, 10)
+    blocks = [
+        ExpandedBlock(
+            name="Clase Teoría",
+            type="class",
+            course_id="calc3",
+            date=target_date,
+            start=datetime(2026, 4, 10, 7, 0),
+            end=datetime(2026, 4, 10, 9, 0),
+            source="recurring",
+        ),
+        ExpandedBlock(
+            name="Almuerzo",
+            type="meal",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 13, 0),
+            end=datetime(2026, 4, 10, 14, 0),
+            source="recurring",
+        ),
+        ExpandedBlock(
+            name="Gym",
+            type="exercise",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 15, 0),
+            end=datetime(2026, 4, 10, 16, 0),
+            source="recurring",
+        ),
+    ]
+
+    slots = free_slots(
+        expanded=blocks,
+        start_date=target_date,
+        end_date=target_date,
+        min_block_minutes=30,
+        day_start=time(6, 0),
+        day_end=time(23, 0),
+        mode="realistic",
+    )
+
+    # Esperado: [06:00-07:00 (60m), 09:00-13:00 (240m), 14:00-15:00 (60m), 16:00-23:00 (420m)]
+    assert len(slots) == 4
+    assert slots[0] == (datetime(2026, 4, 10, 6, 0), datetime(2026, 4, 10, 7, 0))
+    assert slots[1] == (datetime(2026, 4, 10, 9, 0), datetime(2026, 4, 10, 13, 0))
+    assert slots[2] == (datetime(2026, 4, 10, 14, 0), datetime(2026, 4, 10, 15, 0))
+    assert slots[3] == (datetime(2026, 4, 10, 16, 0), datetime(2026, 4, 10, 23, 0))
+
+
+def test_free_slots_realistic_overlapping_breaks():
+    """Breaks solapados (ej. almuerzo y transporte contiguos o superpuestos) no generan huecos falsos."""
+    target_date = date(2026, 4, 10)
+    blocks = [
+        ExpandedBlock(
+            name="Almuerzo",
+            type="meal",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 13, 0),
+            end=datetime(2026, 4, 10, 14, 0),
+            source="recurring",
+        ),
+        ExpandedBlock(
+            name="Transporte",
+            type="transport",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 13, 30),
+            end=datetime(2026, 4, 10, 14, 30),
+            source="recurring",
+        ),
+    ]
+
+    slots = free_slots(
+        expanded=blocks,
+        start_date=target_date,
+        end_date=target_date,
+        min_block_minutes=30,
+        day_start=time(6, 0),
+        day_end=time(23, 0),
+        mode="realistic",
+    )
+
+    # Breaks combinados abarcan 13:00 a 14:30. No debe haber ningún hueco libre dentro de ese intervalo.
+    assert len(slots) == 2
+    assert slots[0] == (datetime(2026, 4, 10, 6, 0), datetime(2026, 4, 10, 13, 0))
+    assert slots[1] == (datetime(2026, 4, 10, 14, 30), datetime(2026, 4, 10, 23, 0))
+
+
+def test_free_slots_realistic_min_block_filter():
+    """Huecos generados entre breaks menores a min_block_minutes se filtran correctamente."""
+    target_date = date(2026, 4, 10)
+    blocks = [
+        ExpandedBlock(
+            name="Almuerzo",
+            type="meal",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 13, 0),
+            end=datetime(2026, 4, 10, 14, 0),
+            source="recurring",
+        ),
+        ExpandedBlock(
+            name="Gym",
+            type="exercise",
+            course_id=None,
+            date=target_date,
+            start=datetime(2026, 4, 10, 14, 20),
+            end=datetime(2026, 4, 10, 15, 0),
+            source="recurring",
+        ),
+    ]
+
+    # Entre 14:00 y 14:20 hay 20 minutos. Con min_block_minutes=30 no debe aparecer.
+    slots = free_slots(
+        expanded=blocks,
+        start_date=target_date,
+        end_date=target_date,
+        min_block_minutes=30,
+        day_start=time(6, 0),
+        day_end=time(23, 0),
+        mode="realistic",
+    )
+
+    assert len(slots) == 2
+    assert slots[0] == (datetime(2026, 4, 10, 6, 0), datetime(2026, 4, 10, 13, 0))
+    assert slots[1] == (datetime(2026, 4, 10, 15, 0), datetime(2026, 4, 10, 23, 0))
 
 
 def test_free_slots_with_busy_blocks():

@@ -87,18 +87,28 @@ async def test_e2e_flow_3_add_event(e2e_calendar: Path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_flow_4_free_slots_availability(e2e_calendar: Path):
+async def test_e2e_flow_4_free_slots_availability(e2e_calendar: Path, monkeypatch):
     """Flujo 4: '¿Tengo 90 minutos libres el miércoles?' (Miércoles 2026-04-08)."""
-    # Miércoles tiene clase de Cálculo de 08:00 a 10:00.
-    # Transporte y almuerzo NO bloquean disponibilidad.
+    # En modo realista (default):
+    # Transporte (07:00-07:45) parte la mañana en bloques < 90 min (filtrados).
+    # Almuerzo (13:00-14:00) parte la tarde en ventanas realistas.
     result = await execute_tool(
         "calendar_free_slots",
         {"start_date": "2026-04-08", "end_date": "2026-04-08", "min_block_minutes": 90},
     )
 
-    # Huecos esperados: 06:00 a 08:00 (120 min) y 10:00 a 23:00 (780 min)
-    assert "06:00-08:00 (120 min)" in result
-    assert "10:00-23:00 (780 min)" in result
+    # Huecos realistas esperados con contexto delimitador
+    assert "10:00-13:00 (180 min)" in result
+    assert "14:00-23:00 (540 min)" in result
+
+    # En modo literal (compatibilidad previa): transporte y almuerzo no parten huecos
+    monkeypatch.setattr(settings, "free_slots_mode", "literal")
+    result_literal = await execute_tool(
+        "calendar_free_slots",
+        {"start_date": "2026-04-08", "end_date": "2026-04-08", "min_block_minutes": 90},
+    )
+    assert "06:00-08:00 (120 min)" in result_literal
+    assert "10:00-23:00 (780 min)" in result_literal
 
 
 @pytest.mark.asyncio
